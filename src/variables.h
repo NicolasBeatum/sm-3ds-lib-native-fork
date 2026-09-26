@@ -4,8 +4,12 @@
 
 extern uint8 g_ram[0x20000];
 
-#define INT16_SHL8(x) ((int16)(x) << 8)
-#define INT16_SHL16(x) ((int16)(x) << 16)
+/* Left-shifting a negative signed value is undefined in C.  The original
+ * 65C816 code uses these operations as fixed-point sign extension, so use
+ * multiplication to preserve the intended two's-complement value on modern
+ * ARM compilers as well. */
+#define INT16_SHL8(x) ((int32)(int16)(x) * 0x100)
+#define INT16_SHL16(x) ((int32)(int16)(x) * 0x10000)
 
 static inline void AddToHiLo(uint16 *hi, uint16 *lo, uint32 v) {
   uint32 t = *lo + (*hi << 16) + v;

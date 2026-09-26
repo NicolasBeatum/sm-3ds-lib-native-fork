@@ -6,6 +6,12 @@
 #include "funcs.h"
 #include "spc_player.h"
 #include "util.h"
+#ifdef SM3DS_PROFILE
+#include "SDL2/SDL.h"
+uint64_t g_profile_audio_lock_ticks;
+uint64_t g_profile_audio_generate_ticks;
+uint64_t g_profile_audio_copy_ticks;
+#endif
 
 struct StateRecorder;
 
@@ -677,7 +683,14 @@ void RtlSaveMusicStateToRam_Locked(void) {
 
 void RtlRenderAudio(int16 *audio_buffer, int samples, int channels) {
   assert(channels == 2);
+#ifdef SM3DS_PROFILE
+  uint64_t profile_before = SDL_GetPerformanceCounter();
+#endif
   RtlApuLock();
+#ifdef SM3DS_PROFILE
+  uint64_t profile_locked = SDL_GetPerformanceCounter();
+  g_profile_audio_lock_ticks += profile_locked - profile_before;
+#endif
 
   RtlPopApuState_Locked();
 
@@ -689,7 +702,14 @@ void RtlRenderAudio(int16 *audio_buffer, int samples, int channels) {
     }
   } else {
     SpcPlayer_GenerateSamples(g_spc_player);
+#ifdef SM3DS_PROFILE
+    uint64_t profile_generated = SDL_GetPerformanceCounter();
+    g_profile_audio_generate_ticks += profile_generated - profile_locked;
+#endif
     dsp_getSamples(g_spc_player->dsp, audio_buffer, samples);
+#ifdef SM3DS_PROFILE
+    g_profile_audio_copy_ticks += SDL_GetPerformanceCounter() - profile_generated;
+#endif
   }
 
   RtlApuUnlock();

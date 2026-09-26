@@ -1,5 +1,8 @@
 #include "sm_cpu_infra.h"
 #include "types.h"
+#ifdef SM3DS_OLD3DS
+#include "ppu_gpu.h"
+#endif
 #include "snes/cpu.h"
 #include "snes/snes.h"
 #include "tracing.h"
@@ -10,12 +13,20 @@
 #include "util.h"
 #include "enemy_types.h"
 #include <time.h>
+#ifdef SM3DS_PROFILE
+#include "SDL2/SDL.h"
+uint64_t g_profile_game_ticks;
+uint64_t g_profile_ppu_ticks;
+uint64_t g_profile_hdma_ticks;
+#endif
 
 void RtlRunFrameCompare(uint16 input, int run_what);
 
 enum RunMode { RM_BOTH, RM_MINE, RM_THEIRS };
 uint8 g_runmode =
-#ifdef FULL_NATIVE
+#ifdef SM3DS_EMULATED_CPU
+  RM_THEIRS
+#elif defined(FULL_NATIVE)
   RM_MINE
 #else
   RM_THEIRS
@@ -34,7 +45,13 @@ Cpu *g_cpu;
 bool g_calling_asm_from_c;
 int g_calling_asm_from_c_ret;
 bool g_fail;
-bool g_use_my_apu_code = true;
+bool g_use_my_apu_code =
+#ifdef SM3DS_EMULATED_CPU
+  false
+#else
+  true
+#endif
+  ;
 extern bool g_other_image;
 
 typedef struct Snapshot {
@@ -952,6 +969,117 @@ void RunOneFrameOfGame_Emulated(void) {
 }
 
 void DrawFrameToPpu(void) {
+#ifdef SM3DS_OLD3DS
+  /* Native game logic has already completed the CPU frame, so advancing the
+   * master clock in two-cycle steps only adds ~178k dispatches per frame.
+   * Preserve the observable scanline events directly instead: PPU render at
+   * dot 512, HDMA at dot 1024, vertical IRQ, then VBlank/NMI. */
+  Snes *snes = g_snes;
+  snes->hPos = 0;
+  snes->vPos = 0;
+  snes->inVblank = false;
+  snes->inNmi = false;
+  bool gpu_frame = PpuGpuCanAttempt() && snes->ppu->mode == 1 &&
+      snes->ppu->brightness == 15 && !snes->ppu->overscan &&
+      !(snes->ppu->mosaicEnabled && snes->ppu->mosaicSize > 1) &&
+      !snes->ppu->bgLayer[0].bigTiles && !snes->ppu->bgLayer[1].bigTiles &&
+      !snes->ppu->bgLayer[2].bigTiles &&
+      !dma_hdmaTouchesBbus(snes->dma, 0x00) &&
+      !dma_hdmaTouchesBbus(snes->dma, 0x04) &&
+      !dma_hdmaTouchesBbus(snes->dma, 0x05) &&
+      !dma_hdmaTouchesBbus(snes->dma, 0x06) &&
+      !dma_hdmaTouchesBbus(snes->dma, 0x18) &&
+      !dma_hdmaTouchesBbus(snes->dma, 0x19) &&
+      !dma_hdmaTouchesBbus(snes->dma, 0x22);
+  Dma dma_before_gpu;
+  if (gpu_frame) {
+    /* Line zero updates frame parity and sprite visibility metadata. */
+    ppu_runLine(snes->ppu, 0);
+    dma_before_gpu = *snes->dma;
+    gpu_frame = PpuGpuBegin(snes->ppu, 224);
+  }
+#ifdef SM3DS_PROFILE
+  uint64_t hdma_before = SDL_GetPerformanceCounter();
+#endif
+  dma_initHdma(snes->dma);
+#ifdef SM3DS_PROFILE
+  g_profile_hdma_ticks += SDL_GetPerformanceCounter() - hdma_before;
+#endif
+
+  int visible_lines = 225;
+  for (int line = 0; line < visible_lines; line++) {
+    snes->vPos = line;
+    snes->hPos = 512;
+    if (gpu_frame && line > 0)
+      PpuGpuLine(snes->ppu, line - 1);
+    else if (!gpu_frame && !snes->disableRender)
+      ppu_runLine(snes->ppu, line);
+
+    snes->hPos = 1024;
+#ifdef SM3DS_PROFILE
+    hdma_before = SDL_GetPerformanceCounter();
+#endif
+    dma_doHdma(snes->dma);
+#ifdef SM3DS_PROFILE
+    g_profile_hdma_ticks += SDL_GetPerformanceCounter() - hdma_before;
+#endif
+
+    snes->hPos = 0;
+    snes->vPos = line + 1;
+    if (snes->vIrqEnabled && line == snes->vTimer)
+      Vector_IRQ();
+  }
+
+  if (gpu_frame && !PpuGpuFinish(snes->ppu)) {
+    /* The GPU backend is deliberately conservative. Recreate the exact CPU
+     * image if a live memory write or unsupported state was discovered. */
+    *snes->dma = dma_before_gpu;
+    dma_initHdma(snes->dma);
+    for (int line = 1; line < visible_lines; line++) {
+      snes->vPos = line;
+      snes->hPos = 512;
+      if (!snes->disableRender) ppu_runLine(snes->ppu, line);
+      snes->hPos = 1024;
+      dma_doHdma(snes->dma);
+      snes->hPos = 0;
+      snes->vPos = line + 1;
+      if (snes->vIrqEnabled && line == snes->vTimer) Vector_IRQ();
+    }
+    gpu_frame = false;
+  }
+  if (!gpu_frame) PpuGpuCpuFrame();
+
+  if (ppu_checkOverscan(snes->ppu)) {
+    visible_lines = 240;
+    for (int line = 225; line < visible_lines; line++) {
+      snes->vPos = line;
+      snes->hPos = 512;
+      if (!snes->disableRender)
+        ppu_runLine(snes->ppu, line);
+      snes->hPos = 1024;
+#ifdef SM3DS_PROFILE
+      hdma_before = SDL_GetPerformanceCounter();
+#endif
+      dma_doHdma(snes->dma);
+#ifdef SM3DS_PROFILE
+      g_profile_hdma_ticks += SDL_GetPerformanceCounter() - hdma_before;
+#endif
+      snes->hPos = 0;
+      snes->vPos = line + 1;
+      if (snes->vIrqEnabled && line == snes->vTimer)
+        Vector_IRQ();
+    }
+  }
+
+  ppu_handleVblank(snes->ppu);
+  snes->inVblank = true;
+  snes->inNmi = true;
+  snes->cpu->nmiWanted = true;
+  if (snes->autoJoyRead)
+    snes->autoJoyTimer = 0;
+  snes->hPos = 2;
+  snes->cpu->nmiWanted = false;
+#else
   g_snes->hPos = g_snes->vPos = 0;
   while (!g_snes->cpu->nmiWanted) {
     do {
@@ -962,6 +1090,7 @@ void DrawFrameToPpu(void) {
     }
   }
   g_snes->cpu->nmiWanted = false;
+#endif
 }
 
 void SaveBugSnapshot() {
@@ -1049,8 +1178,18 @@ void RtlRunFrameCompare(uint16 input, int run_what) {
   } else if (g_runmode == RM_MINE) {
     g_use_my_apu_code = true;
     // g_snes->runningWhichVersion = 0xff;
+#ifdef SM3DS_PROFILE
+    uint64_t before = SDL_GetPerformanceCounter();
+#endif
     RunOneFrameOfGame();
+#ifdef SM3DS_PROFILE
+    uint64_t after = SDL_GetPerformanceCounter();
+    g_profile_game_ticks += after - before;
+#endif
     DrawFrameToPpu();
+#ifdef SM3DS_PROFILE
+    g_profile_ppu_ticks += SDL_GetPerformanceCounter() - after;
+#endif
     // g_snes->runningWhichVersion = 0;
   } else {
     g_use_my_apu_code = true;

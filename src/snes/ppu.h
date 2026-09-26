@@ -29,6 +29,11 @@ enum {
 
 typedef uint16_t PpuZbufType;
 
+typedef struct PpuTileCache {
+  uint32_t keys[0x8000];
+  uint32_t pixels[0x8000];
+} PpuTileCache;
+
 typedef struct __attribute__((aligned(8))) PpuPixelPrioBufs {
   // This holds the prio in the upper 8 bits and the color in the lower 8 bits.
   PpuZbufType data[kPpuXPixels];
@@ -167,6 +172,27 @@ struct __attribute__((aligned(8))) Ppu {
   uint8_t brightnessMult[32 + 31];
   uint8_t brightnessMultHalf[32 * 2];
   uint8_t mosaicModulo[kPpuXPixels];
+
+  /* Derived color tables used by the full-quality Old 3DS compositor. They
+   * are intentionally after pixelbuffer_placeholder and are not serialized. */
+  uint32_t colorMapRgb[256];
+  uint32_t colorMapRgb5Spaced[256];
+  uint32_t fixedMathRgb[256];
+  uint32_t fixedMathBlack;
+  uint32_t fixedMathKey;
+  uint32_t backdropMathRgb[256];
+  uint32_t backdropMathKey;
+  uint8_t subscreenMath[1024];
+  uint8_t subscreenMathKey;
+  bool colorMapDirty;
+  bool fixedMathValid;
+  bool backdropMathValid;
+  PpuTileCache *tileCache;
+  uint32_t spriteLines[256][4];
+  bool spriteLinesValid;
+  /* Active only while the PICA200 backend records per-line state. */
+  bool gpuRecording;
+  bool gpuInvalidWrite;
 
 };
 

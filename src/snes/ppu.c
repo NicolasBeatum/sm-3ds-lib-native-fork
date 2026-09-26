@@ -9,6 +9,21 @@
 #include "ppu.h"
 #include "snes.h"
 #include "../types.h"
+#ifdef SM3DS_PROFILE
+#include "SDL2/SDL.h"
+uint64_t g_profile_ppu_sprite_ticks;
+uint64_t g_profile_ppu_main_ticks;
+uint64_t g_profile_ppu_sub_ticks;
+uint64_t g_profile_ppu_compose_ticks;
+uint32_t g_profile_ppu_phase_frames;
+uint32_t g_profile_color_map_rebuilds;
+uint32_t g_profile_fixed_map_rebuilds;
+uint32_t g_profile_backdrop_map_rebuilds;
+uint32_t g_profile_halfadd_spans;
+uint32_t g_profile_generic_sub_spans;
+uint32_t g_profile_generic_key;
+static bool g_profile_ppu_phase_active;
+#endif
 typedef uint64_t uint64;
 typedef uint32_t uint32;
 // typedef uint32_t uint;
@@ -97,12 +112,22 @@ enum {
 };
 
 Ppu* ppu_init(Snes* snes) {
-  Ppu* ppu = malloc(sizeof(Ppu));
+  Ppu* ppu = calloc(1, sizeof(Ppu));
+  if (!ppu)
+    return NULL;
+  ppu->tileCache = calloc(1, sizeof(PpuTileCache));
+  if (!ppu->tileCache) {
+    free(ppu);
+    return NULL;
+  }
   ppu->snes = snes;
   return ppu;
 }
 
 void ppu_free(Ppu* ppu) {
+  if (!ppu)
+    return;
+  free(ppu->tileCache);
   free(ppu);
 }
 
@@ -110,10 +135,13 @@ void ppu_copy(Ppu *ppu, Ppu *ppu_src) {
   Snes *snes = ppu->snes;
   size_t pitch = ppu->renderPitch;
   uint8_t *renderBuffer = ppu->renderBuffer;
+  PpuTileCache *tile_cache = ppu->tileCache;
   memcpy(ppu, ppu_src, sizeof(*ppu));
   ppu->renderBuffer = renderBuffer;
   ppu->renderPitch = (uint32_t)pitch;
   ppu->snes = snes;
+  ppu->tileCache = tile_cache;
+  memset(tile_cache, 0, sizeof(*tile_cache));
 }
 
 void ppu_reset(Ppu* ppu) {
@@ -121,10 +149,13 @@ void ppu_reset(Ppu* ppu) {
     Snes *snes = ppu->snes;
     size_t pitch = ppu->renderPitch;
     uint8_t *renderBuffer = ppu->renderBuffer;
+    PpuTileCache *tile_cache = ppu->tileCache;
     memset(ppu, 0, sizeof(*ppu));
     ppu->renderBuffer = renderBuffer;
     ppu->renderPitch = (uint32_t)pitch;
     ppu->snes = snes;
+    ppu->tileCache = tile_cache;
+    memset(tile_cache, 0, sizeof(*tile_cache));
   }
   ppu->vramPointer = 0;
   ppu->vramIncrementOnHigh = false;
@@ -217,6 +248,12 @@ void ppu_reset(Ppu* ppu) {
   ppu->countersLatched = false;
   ppu->ppu1openBus = 0;
   ppu->ppu2openBus = 0;
+  ppu->lastBrightnessMult = 0xff;
+  ppu->subscreenMathKey = 0xff;
+  ppu->colorMapDirty = true;
+  ppu->fixedMathValid = false;
+  ppu->backdropMathValid = false;
+  ppu->spriteLinesValid = false;
 }
 
 void ppu_saveload(Ppu *ppu, SaveLoadFunc *func, void *ctx) {
@@ -249,6 +286,41 @@ static inline void ClearBackdrop(PpuPixelPrioBufs *buf) {
     *(uint64*)&buf->data[i] = 0x0500050005000500;
 }
 
+#ifdef SM3DS_OLD3DS
+static inline uint32 PpuGetCached4bppRow(Ppu *ppu, int address) {
+  uint index = (uint)address & 0x7fff;
+  uint32 bits = ppu->vram[index] |
+      ppu->vram[(index + 8) & 0x7fff] << 16;
+  PpuTileCache *cache = ppu->tileCache;
+  if (cache->keys[index] != bits) {
+    uint32 pixels = 0;
+    for (int i = 0; i < 8; i++) {
+      uint32 pixel = (bits >> i) & 1 | (bits >> (7 + i)) & 2 |
+          (bits >> (14 + i)) & 4 | (bits >> (21 + i)) & 8;
+      pixels |= pixel << (i * 4);
+    }
+    cache->keys[index] = bits;
+    cache->pixels[index] = pixels;
+  }
+  return cache->pixels[index];
+}
+
+static void PpuBuildSpriteLines(Ppu *ppu) {
+  memset(ppu->spriteLines, 0, sizeof(ppu->spriteLines));
+  for (unsigned sprite = 0; sprite < 128; sprite++) {
+    unsigned index = sprite * 2;
+    unsigned y = ppu->oam[index] >> 8;
+    unsigned high = ppu->highOam[index >> 3] >> (index & 7);
+    unsigned size = spriteSizes[ppu->objSize][(high >> 1) & 1];
+    unsigned height = ppu->objInterlace ? size / 2 : size;
+    for (unsigned row = 0; row < height; row++)
+      ppu->spriteLines[(y + row) & 255][sprite >> 5] |=
+          1u << (sprite & 31);
+  }
+  ppu->spriteLinesValid = true;
+}
+#endif
+
 void ppu_runLine(Ppu* ppu, int line) {
   if(line == 0) {
     // pre-render line
@@ -257,6 +329,15 @@ void ppu_runLine(Ppu* ppu, int line) {
     ppu->rangeOver = false;
     ppu->timeOver = false;
     ppu->evenFrame = !ppu->evenFrame;
+#ifdef SM3DS_OLD3DS
+    PpuBuildSpriteLines(ppu);
+#endif
+#ifdef SM3DS_PROFILE
+    static uint32_t profile_phase_counter;
+    g_profile_ppu_phase_active = ((++profile_phase_counter & 15) == 0);
+    if (g_profile_ppu_phase_active)
+      g_profile_ppu_phase_frames++;
+#endif
   } else {  
     // Cache the brightness computation
     if (ppu->brightness != ppu->lastBrightnessMult) {
@@ -267,11 +348,41 @@ void ppu_runLine(Ppu* ppu, int line) {
         ((i << 3) | (i >> 2)) * ppu_brightness / 15;
       // Store 31 extra entries to remove the need for clamping to 31.
       memset(&ppu->brightnessMult[32], ppu->brightnessMult[31], 31);
+      ppu->colorMapDirty = true;
+      ppu->fixedMathValid = false;
+      ppu->backdropMathValid = false;
     }
 
+    if (ppu->colorMapDirty) {
+#ifdef SM3DS_PROFILE
+      g_profile_color_map_rebuilds++;
+#endif
+      ppu->colorMapDirty = false;
+      ppu->fixedMathValid = false;
+      ppu->backdropMathValid = false;
+      for (int i = 0; i < 256; i++) {
+        uint32 color = ppu->cgram[i];
+        ppu->colorMapRgb5Spaced[i] =
+            (color & 31) << 16 | ((color >> 5) & 31) << 8 |
+            ((color >> 10) & 31);
+        ppu->colorMapRgb[i] =
+            ppu->brightnessMult[color & 31] << 16 |
+            ppu->brightnessMult[(color >> 5) & 31] << 8 |
+            ppu->brightnessMult[(color >> 10) & 31];
+      }
+    }
+
+#ifdef SM3DS_PROFILE
+    uint64_t profile_sprite_before = g_profile_ppu_phase_active ?
+        SDL_GetPerformanceCounter() : 0;
+#endif
     // evaluate sprites
     ClearBackdrop(&ppu->objBuffer);
     ppu->lineHasSprites = !ppu->forcedBlank && ppu_evaluateSprites(ppu, line - 1);
+#ifdef SM3DS_PROFILE
+    if (g_profile_ppu_phase_active)
+      g_profile_ppu_sprite_ticks += SDL_GetPerformanceCounter() - profile_sprite_before;
+#endif
 
     if (g_new_ppu) {
       PpuDrawWholeLine(ppu, line);
@@ -423,6 +534,24 @@ static void PpuDrawBackground_4bpp(Ppu *ppu, uint y, bool sub, uint layer, PpuZb
       NEXT_TP();
       int ta = (tile & 0x8000) ? tileadr1 : tileadr0;
       PpuZbufType z = (tile & 0x2000) ? zhi : zlo;
+#ifdef SM3DS_OLD3DS
+      uint32 pixels = PpuGetCached4bppRow(
+          ppu, ta + (tile & 0x3ff) * 16);
+      if (pixels) {
+        z += ((tile & 0x1c00) >> kPaletteShift);
+        if (tile & 0x4000) {
+          for (unsigned i = 0; i < 8; i++) {
+            uint32 pixel = (pixels >> (i * 4)) & 15;
+            if (pixel && z > dstz[i]) dstz[i] = z + pixel;
+          }
+        } else {
+          for (unsigned i = 0; i < 8; i++) {
+            uint32 pixel = (pixels >> ((7 - i) * 4)) & 15;
+            if (pixel && z > dstz[i]) dstz[i] = z + pixel;
+          }
+        }
+      }
+#else
       uint32 bits = READ_BITS(ta, tile & 0x3ff);
       if (bits) {
         z += ((tile & 0x1c00) >> kPaletteShift);
@@ -434,6 +563,7 @@ static void PpuDrawBackground_4bpp(Ppu *ppu, uint y, bool sub, uint layer, PpuZb
           DO_PIXEL_HFLIP(4); DO_PIXEL_HFLIP(5); DO_PIXEL_HFLIP(6); DO_PIXEL_HFLIP(7);
         }
       }
+#endif
       dstz += 8, w -= 8;
     }
     // Handle remaining clipped part
@@ -697,7 +827,229 @@ static void PpuDrawBackgrounds(Ppu *ppu, int y, bool sub) {
   }
 }
 
+#ifdef SM3DS_OLD3DS
+static inline void PpuWriteMappedSpan(
+    uint32 *__restrict dst, const PpuZbufType *__restrict src,
+    uint32 count, const uint32 *__restrict color_map) {
+  while (count >= 8) {
+    dst[0] = color_map[src[0] & 0xff];
+    dst[1] = color_map[src[1] & 0xff];
+    dst[2] = color_map[src[2] & 0xff];
+    dst[3] = color_map[src[3] & 0xff];
+    dst[4] = color_map[src[4] & 0xff];
+    dst[5] = color_map[src[5] & 0xff];
+    dst[6] = color_map[src[6] & 0xff];
+    dst[7] = color_map[src[7] & 0xff];
+    dst += 8;
+    src += 8;
+    count -= 8;
+  }
+  while (count--) *dst++ = color_map[*src++ & 0xff];
+}
+
+static uint32 PpuFixedMathColor(Ppu *ppu, uint32 color, bool halve) {
+  int r = color & 31, g = (color >> 5) & 31, b = (color >> 10) & 31;
+  if (ppu->subtractColor) {
+    r = IntMax(r - ppu->fixedColorR, 0);
+    g = IntMax(g - ppu->fixedColorG, 0);
+    b = IntMax(b - ppu->fixedColorB, 0);
+  } else {
+    r += ppu->fixedColorR;
+    g += ppu->fixedColorG;
+    b += ppu->fixedColorB;
+  }
+  const uint8 *map = halve ? ppu->brightnessMultHalf : ppu->brightnessMult;
+  return map[b] | map[g] << 8 | map[r] << 16;
+}
+
+static void PpuPrepareFixedMath(Ppu *ppu) {
+  bool halve = ppu->halfColor && !ppu->addSubscreen;
+  uint32 key = ppu->fixedColorR | ppu->fixedColorG << 5 |
+      ppu->fixedColorB << 10 | halve << 15 | ppu->subtractColor << 16 |
+      ppu->lastBrightnessMult << 17;
+  if (ppu->fixedMathValid && ppu->fixedMathKey == key)
+    return;
+#ifdef SM3DS_PROFILE
+  g_profile_fixed_map_rebuilds++;
+#endif
+  for (uint i = 0; i < 256; i++)
+    ppu->fixedMathRgb[i] = PpuFixedMathColor(ppu, ppu->cgram[i], halve);
+  ppu->fixedMathBlack = PpuFixedMathColor(ppu, 0, halve);
+  ppu->fixedMathKey = key;
+  ppu->fixedMathValid = true;
+}
+
+static void PpuWriteFixedMathSpan(Ppu *ppu, uint32 *dst,
+                                  const PpuZbufType *src, uint32 count,
+                                  uint32 mask, bool unclipped) {
+  if (unclipped) {
+    while (count--) {
+      uint32 pixel = *src++;
+      *dst++ = (mask & (1u << ((pixel >> 8) & 15))) ?
+          ppu->fixedMathRgb[pixel & 255] : ppu->colorMapRgb[pixel & 255];
+    }
+  } else {
+    uint32 black = ppu->fixedMathBlack;
+    while (count--) {
+      uint32 pixel = *src++;
+      *dst++ = (mask & (1u << ((pixel >> 8) & 15))) ? black : 0;
+    }
+  }
+}
+
+static void PpuPrepareSubscreenMath(Ppu *ppu) {
+  uint8 key = ppu->lastBrightnessMult | ppu->halfColor << 4 |
+      ppu->subtractColor << 5;
+  if (ppu->subscreenMathKey == key)
+    return;
+  const uint8 *map = ppu->halfColor ?
+      ppu->brightnessMultHalf : ppu->brightnessMult;
+  for (uint b = 0; b < 32; b++) {
+    for (uint a = 0; a < 32; a++) {
+      uint component = ppu->subtractColor ? (a >= b ? a - b : 0) : a + b;
+      ppu->subscreenMath[a | b << 5] = map[component];
+    }
+  }
+  ppu->subscreenMathKey = key;
+}
+
+static void PpuWriteBackdropSubMath(Ppu *ppu, uint32 *dst, uint32 left,
+                                    uint32 right, bool unclipped) {
+  uint32 key = ppu->fixedMathKey | (uint32)ppu->halfColor << 22 |
+      (uint32)unclipped << 23;
+  if (!ppu->backdropMathValid || ppu->backdropMathKey != key) {
+#ifdef SM3DS_PROFILE
+    g_profile_backdrop_map_rebuilds++;
+#endif
+    PpuPrepareSubscreenMath(ppu);
+    const uint8 *map = ppu->subscreenMath;
+    uint32 a = unclipped ? ppu->cgram[0] : 0;
+    ppu->backdropMathRgb[0] = unclipped ?
+        ppu->fixedMathRgb[0] : ppu->fixedMathBlack;
+    for (unsigned i = 1; i < 256; i++) {
+      uint32 b = ppu->cgram[i];
+      uint32 r = map[(a & 31) | ((b & 31) << 5)];
+      uint32 g = map[((a >> 5) & 31) | (b & 0x3e0)];
+      uint32 blue = map[((a >> 10) & 31) | ((b >> 5) & 0x3e0)];
+      ppu->backdropMathRgb[i] = blue | g << 8 | r << 16;
+    }
+    ppu->backdropMathKey = key;
+    ppu->backdropMathValid = true;
+  }
+  for (unsigned i = left; i < right; i++) {
+    uint32 pixel = ppu->bgBuffers[0].data[i];
+    *dst++ = (pixel & 0xf00) == 0x500 ?
+        ppu->backdropMathRgb[ppu->bgBuffers[1].data[i] & 255] :
+        (unclipped ? ppu->colorMapRgb[pixel & 255] : 0);
+  }
+}
+
+static void PpuWriteFullBrightnessHalfAdd(Ppu *ppu, uint32 *dst,
+                                         uint32 left, uint32 right,
+                                         uint32 mask, bool unclipped) {
+  const uint32 *spaced = ppu->colorMapRgb5Spaced;
+  uint32 fixed = ppu->fixedColorR << 16 | ppu->fixedColorG << 8 |
+      ppu->fixedColorB;
+  for (uint i = left; i < right; i++) {
+    uint32 pixel = ppu->bgBuffers[0].data[i];
+    uint32 index = pixel & 255;
+    if (!(mask & (1u << ((pixel >> 8) & 15)))) {
+      *dst++ = unclipped ? ppu->colorMapRgb[index] : 0;
+      continue;
+    }
+    uint32 sub_index = ppu->bgBuffers[1].data[i] & 255;
+    if (sub_index == 0) {
+      uint32 sum = (unclipped ? spaced[index] : 0) + fixed;
+      uint32 high = sum & 0x202020;
+      uint32 saturated = (sum | (high - (high >> 5))) & 0x1f1f1f;
+      *dst++ = (saturated << 3) | ((saturated >> 2) & 0x070707);
+      continue;
+    }
+    uint32 sum = (unclipped ? spaced[index] : 0) + spaced[sub_index];
+    uint32 rgb5 = (sum >> 1) & 0x1f1f1f;
+    *dst++ = (rgb5 << 3) | ((rgb5 >> 2) & 0x070707);
+  }
+}
+
+static void PpuWriteFullBrightnessAdd(Ppu *ppu, uint32 *dst,
+                                     uint32 left, uint32 right,
+                                     uint32 mask, bool unclipped) {
+  const uint32 *spaced = ppu->colorMapRgb5Spaced;
+  uint32 fixed = ppu->fixedColorR << 16 | ppu->fixedColorG << 8 |
+      ppu->fixedColorB;
+  for (uint i = left; i < right; i++) {
+    uint32 pixel = ppu->bgBuffers[0].data[i];
+    uint32 index = pixel & 255;
+    if (!(mask & (1u << ((pixel >> 8) & 15)))) {
+      *dst++ = unclipped ? ppu->colorMapRgb[index] : 0;
+      continue;
+    }
+    uint32 sub_index = ppu->bgBuffers[1].data[i] & 255;
+    uint32 sum = (unclipped ? spaced[index] : 0) +
+        (sub_index ? spaced[sub_index] : fixed);
+    uint32 high = sum & 0x202020;
+    uint32 saturated = (sum | (high - (high >> 5))) & 0x1f1f1f;
+    *dst++ = (saturated << 3) | ((saturated >> 2) & 0x070707);
+  }
+}
+
+static void PpuWriteSubscreenMathSpan(Ppu *ppu, uint32 *dst, uint32 left,
+                                      uint32 right, uint32 mask,
+                                      bool unclipped) {
+  if (mask == (1u << 5)) {
+    PpuPrepareFixedMath(ppu);
+    PpuWriteBackdropSubMath(ppu, dst, left, right, unclipped);
+    return;
+  }
+  if (ppu->lastBrightnessMult == 15 && ppu->halfColor &&
+      !ppu->subtractColor) {
+#ifdef SM3DS_PROFILE
+    g_profile_halfadd_spans++;
+#endif
+    PpuWriteFullBrightnessHalfAdd(ppu, dst, left, right, mask, unclipped);
+    return;
+  }
+  if (ppu->lastBrightnessMult == 15 && !ppu->halfColor &&
+      !ppu->subtractColor) {
+    PpuWriteFullBrightnessAdd(ppu, dst, left, right, mask, unclipped);
+    return;
+  }
+  PpuPrepareFixedMath(ppu);
+#ifdef SM3DS_PROFILE
+  g_profile_generic_sub_spans++;
+  g_profile_generic_key = ppu->lastBrightnessMult |
+      ppu->halfColor << 4 | ppu->subtractColor << 5 |
+      unclipped << 6;
+#endif
+  PpuPrepareSubscreenMath(ppu);
+  const uint8 *map = ppu->subscreenMath;
+  for (uint i = left; i < right; i++) {
+    uint32 pixel = ppu->bgBuffers[0].data[i];
+    uint32 index = pixel & 255;
+    if (!(mask & (1u << ((pixel >> 8) & 15)))) {
+      *dst++ = unclipped ? ppu->colorMapRgb[index] : 0;
+      continue;
+    }
+    uint32 sub_index = ppu->bgBuffers[1].data[i] & 255;
+    if (sub_index == 0) {
+      *dst++ = unclipped ? ppu->fixedMathRgb[index] : ppu->fixedMathBlack;
+      continue;
+    }
+    uint32 color = unclipped ? ppu->cgram[index] : 0;
+    uint32 color2 = ppu->cgram[sub_index];
+    uint32 r = map[(color & 31) | ((color2 & 31) << 5)];
+    uint32 g = map[((color >> 5) & 31) | (color2 & 0x3e0)];
+    uint32 b = map[((color >> 10) & 31) | ((color2 >> 5) & 0x3e0)];
+    *dst++ = b | g << 8 | r << 16;
+  }
+}
+#endif
+
 static NOINLINE void PpuDrawWholeLine(Ppu *ppu, uint y) {
+#ifdef SM3DS_PROFILE
+  uint64_t profile_phase_before = g_profile_ppu_phase_active ?
+      SDL_GetPerformanceCounter() : 0;
+#endif
   if (ppu->forcedBlank) {
     uint8 *dst = &ppu->renderBuffer[(y - 1) * ppu->renderPitch];
     size_t n = sizeof(uint32) * (256 + ppu->extraLeftRight * 2);
@@ -710,6 +1062,13 @@ static NOINLINE void PpuDrawWholeLine(Ppu *ppu, uint y) {
 
   // Render main screen
   PpuDrawBackgrounds(ppu, y, false);
+#ifdef SM3DS_PROFILE
+  if (g_profile_ppu_phase_active) {
+    uint64_t now = SDL_GetPerformanceCounter();
+    g_profile_ppu_main_ticks += now - profile_phase_before;
+    profile_phase_before = now;
+  }
+#endif
 
   // The 6:th bit is automatically zero, math is never applied to the first half of the sprites.
   uint32 math_enabled = 0;
@@ -725,6 +1084,13 @@ static NOINLINE void PpuDrawWholeLine(Ppu *ppu, uint y) {
       rendered_subscreen = true;
     }
   }
+#ifdef SM3DS_PROFILE
+  if (g_profile_ppu_phase_active) {
+    uint64_t now = SDL_GetPerformanceCounter();
+    g_profile_ppu_sub_ticks += now - profile_phase_before;
+    profile_phase_before = now;
+  }
+#endif
 
   // Color window affects the drawing mode in each region
   PpuWindows cwin;
@@ -750,12 +1116,36 @@ static NOINLINE void PpuDrawWholeLine(Ppu *ppu, uint y) {
     if (math_enabled_cur == 0 || fixed_color == 0 && !ppu->halfColor && !rendered_subscreen) {
       // Math is disabled (or has no effect), so can avoid the per-pixel maths check
       uint32 i = left;
+#ifdef SM3DS_OLD3DS
+      if (clip_color_mask == 0) {
+        memset(dst, 0, (right - left) * sizeof(*dst));
+        dst += right - left;
+      } else {
+        uint32 count = right - left;
+        PpuWriteMappedSpan(dst, &ppu->bgBuffers[0].data[i], count,
+                           ppu->colorMapRgb);
+        dst += count;
+      }
+#else
       do {
         uint32 color = ppu->cgram[ppu->bgBuffers[0].data[i] & 0xff];
         dst[0] = ppu->brightnessMult[color & clip_color_mask] << 16 |
           ppu->brightnessMult[(color >> 5) & clip_color_mask] << 8 |
           ppu->brightnessMult[(color >> 10) & clip_color_mask];
       } while (dst++, ++i < right);
+#endif
+#ifdef SM3DS_OLD3DS
+    } else if (!rendered_subscreen) {
+      PpuPrepareFixedMath(ppu);
+      PpuWriteFixedMathSpan(ppu, dst, &ppu->bgBuffers[0].data[left],
+                            right - left, math_enabled_cur,
+                            clip_color_mask != 0);
+      dst += right - left;
+    } else {
+      PpuWriteSubscreenMathSpan(ppu, dst, left, right, math_enabled_cur,
+                                clip_color_mask != 0);
+      dst += right - left;
+#else
     } else {
       uint8 *half_color_map = ppu->halfColor ? ppu->brightnessMultHalf : ppu->brightnessMult;
       // Store this in locals
@@ -791,8 +1181,14 @@ static NOINLINE void PpuDrawWholeLine(Ppu *ppu, uint y) {
         }
         dst[0] = color_map[b] | color_map[g] << 8 | color_map[r] << 16;
       } while (dst++, ++i < right);
+#endif
     }
   } while (cw_clip_math >>= 1, ++windex < cwin.nr);
+
+#ifdef SM3DS_PROFILE
+  if (g_profile_ppu_phase_active)
+    g_profile_ppu_compose_ticks += SDL_GetPerformanceCounter() - profile_phase_before;
+#endif
 
 }
 
@@ -1111,7 +1507,24 @@ static bool ppu_evaluateSprites(Ppu* ppu, int line) {
   uint8_t index = ppu->objPriority ? (ppu->oamAdr & 0xfe) : 0;
   int spritesFound = 0;
   int tilesFound = 0;
+#ifdef SM3DS_OLD3DS
+  bool use_visible_list = !ppu->objPriority && ppu->spriteLinesValid;
+  unsigned visible_word = 0;
+  uint32 visible_remaining = use_visible_list ?
+      ppu->spriteLines[line & 255][0] : 0;
+#endif
   for(int i = 0; i < 128; i++) {
+#ifdef SM3DS_OLD3DS
+    if (use_visible_list) {
+      while (!visible_remaining && ++visible_word < 4)
+        visible_remaining = ppu->spriteLines[line & 255][visible_word];
+      if (visible_word == 4)
+        break;
+      unsigned sprite = visible_word * 32 + __builtin_ctz(visible_remaining);
+      visible_remaining &= visible_remaining - 1;
+      index = sprite * 2;
+    }
+#endif
     uint8_t y = ppu->oam[index] >> 8;
     // check if the sprite is on this line and get the sprite size
     uint8_t row = line - y;
@@ -1155,8 +1568,13 @@ static bool ppu_evaluateSprites(Ppu* ppu, int line) {
             // figure out which tile this uses, looping within 16x16 pages, and get it's data
             int usedCol = oam1 & 0x4000 ? spriteSize - 1 - col : col;
             int usedTile = ((((oam1 & 0xff) >> 4) + (row >> 3)) << 4) | (((oam1 & 0xf) + (usedCol >> 3)) & 0xf);
+#ifdef SM3DS_OLD3DS
+            uint32 pixels = PpuGetCached4bppRow(
+                ppu, objAdr + usedTile * 16 + (row & 0x7));
+#else
             uint16 *addr = &ppu->vram[(objAdr + usedTile * 16 + (row & 0x7)) & 0x7fff];
             uint32 plane = addr[0] | addr[8] << 16;
+#endif
             // go over each pixel
             int px_left = IntMax(-(col + x + kPpuExtraLeftRight), 0);
             int px_right = IntMin(256 + kPpuExtraLeftRight - (col + x), 8);
@@ -1164,8 +1582,12 @@ static bool ppu_evaluateSprites(Ppu* ppu, int line) {
 
             for (int px = px_left; px < px_right; px++, dst++) {
               int shift = oam1 & 0x4000 ? px : 7 - px;
+#ifdef SM3DS_OLD3DS
+              int pixel = (pixels >> (shift * 4)) & 15;
+#else
               uint32 bits = plane >> shift;
               int pixel = (bits >> 0) & 1 | (bits >> 7) & 2 | (bits >> 14) & 4 | (bits >> 21) & 8;
+#endif
               // draw it in the buffer if there is a pixel here, and the buffer there is still empty
               if (pixel != 0 && (dst[0] & 0xff) == 0)
                 dst[0] = z + pixel;
@@ -1176,7 +1598,10 @@ static bool ppu_evaluateSprites(Ppu* ppu, int line) {
         if(tilesFound > 34) break; // break out of sprite-loop if max tiles found
       }
     }
-    index += 2;
+#ifdef SM3DS_OLD3DS
+    if (!use_visible_list)
+#endif
+      index += 2;
   }
   return tilesFound != 0;
 }
@@ -1315,6 +1740,9 @@ uint8_t ppu_read(Ppu* ppu, uint8_t adr) {
 void ppu_write(Ppu* ppu, uint8_t adr, uint8_t val) {
 //  if (adr != 24 && adr != 25)
 //    printf("ppu_write(%d, %d)\n", adr, val);
+  if (ppu->gpuRecording &&
+      (adr == 0x04 || adr == 0x18 || adr == 0x19 || adr == 0x22))
+    ppu->gpuInvalidWrite = true;
   switch(adr) {
     case 0x00: {
       // TODO: oam address reset when written on first line of vblank, (and when forced blank is disabled?)
@@ -1326,6 +1754,7 @@ void ppu_write(Ppu* ppu, uint8_t adr, uint8_t val) {
       ppu->objSize = val >> 5;
       ppu->objTileAdr1 = (val & 7) << 13;
       ppu->objTileAdr2 = ppu->objTileAdr1 + (((val & 0x18) + 8) << 9);
+      ppu->spriteLinesValid = false;
       break;
     }
     case 0x02: {
@@ -1344,6 +1773,7 @@ void ppu_write(Ppu* ppu, uint8_t adr, uint8_t val) {
       break;
     }
     case 0x04: {
+      ppu->spriteLinesValid = false;
       if(ppu->oamInHigh) {
         ppu->highOam[((ppu->oamAdr & 0xf) << 1) | ppu->oamSecondWrite] = val;
         if(ppu->oamSecondWrite) {
@@ -1490,6 +1920,9 @@ void ppu_write(Ppu* ppu, uint8_t adr, uint8_t val) {
         ppu->cgramBuffer = val;
       } else {
         ppu->cgram[ppu->cgramPointer++] = (val << 8) | ppu->cgramBuffer;
+        ppu->colorMapDirty = true;
+        ppu->fixedMathValid = false;
+        ppu->backdropMathValid = false;
       }
       ppu->cgramSecondWrite = !ppu->cgramSecondWrite;
       break;

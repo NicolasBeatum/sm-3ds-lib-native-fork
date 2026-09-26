@@ -3,6 +3,9 @@
 #include "ida_types.h"
 #include "variables.h"
 #include "funcs.h"
+#ifdef SM3DS_DOOR_TRACE
+#include <stdio.h>
+#endif
 
 #define fnkPlmHeaderDefPtrs 0x949139
 #define off_9492D9 ((uint16*)RomFixedPtr(0x9492d9))
@@ -489,7 +492,7 @@ static uint8 BlockColl_Vert_Slope_NonSquare(CollInfo *ci, uint16 k) {  // 0x9486
       int16 v13 = (ci->ci_r18_r20 >> 16) + v12;
       if (v13 < 0)
         v13 = 0;
-      ci->ci_r18_r20 = v13 << 16;
+      ci->ci_r18_r20 = INT16_SHL16(v13);
       return 1;
     } else {
       return 0;
@@ -506,7 +509,7 @@ static uint8 BlockColl_Vert_Slope_NonSquare(CollInfo *ci, uint16 k) {  // 0x9486
       int16 v7 = (ci->ci_r18_r20 >> 16) + v6;
       if (v7 < 0)
         v7 = 0;
-      ci->ci_r18_r20 = v7 << 16;
+      ci->ci_r18_r20 = INT16_SHL16(v7);
       return 1;
     } else {
       return 0;
@@ -575,13 +578,13 @@ LABEL_10:
     int16 v5 = samus_x_radius + (ci->ci_r32 | 7) + 1 - samus_x_pos;
     if (v5 >= 0)
       v5 = 0;
-    ci->ci_r18_r20 = v5 << 16;
+    ci->ci_r18_r20 = INT16_SHL16(v5);
     samus_x_subpos = 0;
   } else {
     int16 v4 = (ci->ci_r32 & 0xFFF8) - samus_x_radius - samus_x_pos;
     if (v4 < 0)
       v4 = 0;
-    ci->ci_r18_r20 = v4 << 16;
+    ci->ci_r18_r20 = INT16_SHL16(v4);
     samus_x_subpos = -1;
   }
   return 1;
@@ -611,14 +614,14 @@ LABEL_10:
     int16 v5 = samus_y_radius + (ci->ci_r32 | 7) + 1 - samus_y_pos;
     if (v5 >= 0)
       v5 = 0;
-    ci->ci_r18_r20 = v5 << 16;
+    ci->ci_r18_r20 = INT16_SHL16(v5);
     samus_y_subpos = 0;
     return 1;
   } else {
     int16 v4 = (ci->ci_r32 & 0xFFF8) - samus_y_radius - samus_y_pos;
     if (v4 < 0)
       v4 = 0;
-    ci->ci_r18_r20 = v4 << 16;
+    ci->ci_r18_r20 = INT16_SHL16(v4);
     samus_y_subpos = -1;
     samus_pos_adjusted_by_slope_flag = 1;
     return 1;
@@ -677,14 +680,14 @@ static uint8 BlockColl_Horiz_SolidShootGrappleBlock(CollInfo *ci) {  // 0x948F49
     int16 v2 = samus_x_radius + (ci->ci_r32 | 0xF) + 1 - samus_x_pos;
     if (v2 >= 0)
       v2 = 0;
-    ci->ci_r18_r20 = v2 << 16;
+    ci->ci_r18_r20 = INT16_SHL16(v2);
     samus_x_subpos = 0;
     return 1;
   } else {
     int16 v0 = (ci->ci_r32 & 0xFFF0) - samus_x_radius - samus_x_pos;
     if (v0 < 0)
       v0 = 0;
-    ci->ci_r18_r20 = v0 << 16;
+    ci->ci_r18_r20 = INT16_SHL16(v0);
     samus_x_subpos = -1;
     return 1;
   }
@@ -695,14 +698,14 @@ static uint8 BlockColl_Vert_SolidShootGrappleBlock(CollInfo *ci) {  // 0x948F82
     int16 v2 = samus_y_radius + (ci->ci_r32 | 0xF) + 1 - samus_y_pos;
     if (v2 >= 0)
       v2 = 0;
-    ci->ci_r18_r20 = v2 << 16;
+    ci->ci_r18_r20 = INT16_SHL16(v2);
     samus_y_subpos = 0;
     return 1;
   } else {
     int16 v0 = (ci->ci_r32 & 0xFFF0) - samus_y_radius - samus_y_pos;
     if (v0 < 0)
       v0 = 0;
-    ci->ci_r18_r20 = v0 << 16;
+    ci->ci_r18_r20 = INT16_SHL16(v0);
     samus_y_subpos = -1;
     return 1;
   }
@@ -954,6 +957,23 @@ static Func_CollInfo_U8 *const kBlockColl_Vert_CheckColl[16] = {
 static uint8 BlockColl_Horiz_CheckColl(CollInfo *ci, uint16 k) {
   uint8 rv;
   cur_block_index = k >> 1;
+#ifdef SM3DS_DOOR_TRACE
+  if (room_ptr == 0x91f8 && samus_x_pos < 160 &&
+      (level_data[cur_block_index] & 0xf000) >= 0x8000) {
+    FILE *f = fopen("sdmc:/sm3ds-door.log", "a");
+    if (f) {
+      fprintf(f,
+              "samus frame=%u pos=%u,%u block=%u xy=%u,%u level=%04x "
+              "bts=%02x amt=%08lx\n",
+              nmi_frame_counter_word, samus_x_pos, samus_y_pos,
+              cur_block_index, cur_block_index % room_width_in_blocks,
+              cur_block_index / room_width_in_blocks,
+              level_data[cur_block_index], BTS[cur_block_index],
+              (unsigned long)(uint32)ci->ci_r18_r20);
+      fclose(f);
+    }
+  }
+#endif
   cur_coll_amt32 = &ci->ci_r18_r20;  // kludge needed for SpawnPLM
   do {
     rv = kBlockColl_Horiz_CheckColl[(level_data[cur_block_index] & 0xF000) >> 12](ci);
@@ -1667,6 +1687,20 @@ static uint8 BlockShotReactHoriz(CollInfo *ci, uint16 k) {  // 0x94A1B5
   if (k >= room_size_in_blocks)
     return 1;
   cur_block_index = k >> 1;
+#ifdef SM3DS_DOOR_TRACE
+  if (room_ptr == 0x91f8 && cur_block_index % room_width_in_blocks < 4) {
+    FILE *f = fopen("sdmc:/sm3ds-door.log", "a");
+    if (f) {
+      fprintf(f,
+              "shot frame=%u proj=%u block=%u xy=%u,%u level=%04x bts=%02x\n",
+              nmi_frame_counter_word, projectile_index, cur_block_index,
+              cur_block_index % room_width_in_blocks,
+              cur_block_index / room_width_in_blocks,
+              level_data[cur_block_index], BTS[cur_block_index]);
+      fclose(f);
+    }
+  }
+#endif
   do {
     v1 = kBlockShotReactHoriz[(level_data[cur_block_index] & 0xF000) >> 12](ci);
   } while (v1 & 0x80);

@@ -51,6 +51,7 @@ void dma_write(Dma* dma, uint16_t adr, uint8_t val); // 43x0-43xf
 void dma_doDma(Dma* dma);
 void dma_initHdma(Dma* dma);
 void dma_doHdma(Dma* dma);
+bool dma_hdmaTouchesBbus(Dma *dma, uint8_t address);
 bool dma_cycle(Dma* dma);
 void dma_startDma(Dma* dma, uint8_t val, bool hdma);
 void dma_saveload(Dma *dma, SaveLoadFunc *func, void *ctx);

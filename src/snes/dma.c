@@ -10,6 +10,13 @@
 #include "dma.h"
 #include "snes.h"
 
+#ifdef SM3DS_PROFILE
+uint32_t g_profile_hdma_calls;
+uint32_t g_profile_hdma_active_channels;
+uint32_t g_profile_hdma_bytes;
+uint32_t g_profile_hdma_bbus[256];
+#endif
+
 static const int bAdrOffsets[8][4] = {
   {0, 0, 0, 0},
   {0, 1, 0, 1},
@@ -261,8 +268,14 @@ void dma_initHdma(Dma* dma) {
 void dma_doHdma(Dma* dma) {
   dma->hdmaTimer = 0;
   bool hdmaHappened = false;
+#ifdef SM3DS_PROFILE
+  g_profile_hdma_calls++;
+#endif
   for(int i = 0; i < 8; i++) {
     if(dma->channel[i].hdmaActive && !dma->channel[i].terminated) {
+#ifdef SM3DS_PROFILE
+      g_profile_hdma_active_channels++;
+#endif
 //      printf("DMA %d: 0x%x\n", i, dma->channel[i].bAdr);
       hdmaHappened = true;
       // terminate any dma
@@ -274,16 +287,21 @@ void dma_doHdma(Dma* dma) {
       
       if(dma->channel[i].doTransfer) {
         for(int j = 0; j < transferLength[dma->channel[i].mode]; j++) {
+          uint8_t transferBAdr = dma->channel[i].bAdr + bAdrOffsets[dma->channel[i].mode][j];
+#ifdef SM3DS_PROFILE
+          g_profile_hdma_bytes++;
+          g_profile_hdma_bbus[transferBAdr]++;
+#endif
           dma->hdmaTimer += 8; // 8 cycles for each byte transferred
           if(dma->channel[i].indirect) {
             dma_transferByte(
               dma, dma->channel[i].size++, dma->channel[i].indBank,
-              dma->channel[i].bAdr + bAdrOffsets[dma->channel[i].mode][j], dma->channel[i].fromB
+              transferBAdr, dma->channel[i].fromB
             );
           } else {
             dma_transferByte(
               dma, dma->channel[i].tableAdr++, dma->channel[i].aBank,
-              dma->channel[i].bAdr + bAdrOffsets[dma->channel[i].mode][j], dma->channel[i].fromB
+              transferBAdr, dma->channel[i].fromB
             );
           }
         }
@@ -304,6 +322,17 @@ void dma_doHdma(Dma* dma) {
     }
   }
   if(hdmaHappened) dma->hdmaTimer += 16; // 18 cycles overhead, -2 for this cycle
+}
+
+bool dma_hdmaTouchesBbus(Dma *dma, uint8_t address) {
+  for (int i = 0; i < 8; i++) {
+    DmaChannel *channel = &dma->channel[i];
+    if (!channel->hdmaActive) continue;
+    for (int j = 0; j < transferLength[channel->mode]; j++)
+      if ((uint8_t)(channel->bAdr + bAdrOffsets[channel->mode][j]) == address)
+        return true;
+  }
+  return false;
 }
 
 static void dma_transferByte(Dma* dma, uint16_t aAdr, uint8_t aBank, uint8_t bAdr, bool fromB) {

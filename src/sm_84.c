@@ -3,6 +3,9 @@
 #include "variables.h"
 #include "sm_rtl.h"
 #include "funcs.h"
+#ifdef SM3DS_DOOR_TRACE
+#include <stdio.h>
+#endif
 
 
 #define kGoldenTorizoPalette1 ((uint16*)RomFixedPtr(0x848032))
@@ -83,6 +86,28 @@ void WriteLevelDataBlockTypeAndBts(uint16 k, uint16 a) {  // 0x8482B4
   v2[3] = HIBYTE(a) | v2[3] & 0xF;
   BTS[k >> 1] = a;
 }
+
+#ifdef SM3DS_DOOR_TRACE
+static void TraceDoorPlm(const char *name, uint16 j, uint16 before) {
+  if (room_ptr != 0x91f8)
+    return;
+  int i = j >> 1;
+  FILE *f = fopen("sdmc:/sm3ds-door.log", "a");
+  if (!f)
+    return;
+  fprintf(f,
+          "%s frame=%u id=%u block=%u xy=%u,%u arg=%04x proj=%04x "
+          "ptype=%04x before=%04x after=%04x bts=%02x\n",
+          name, nmi_frame_counter_word, j, plm_block_indices[i] >> 1,
+          (plm_block_indices[i] >> 1) % room_width_in_blocks,
+          (plm_block_indices[i] >> 1) / room_width_in_blocks,
+          plm_room_arguments[i], projectile_index,
+          sign16(projectile_index) ? 0xffff : projectile_type[projectile_index >> 1],
+          before, level_data[plm_block_indices[i] >> 1],
+          BTS[plm_block_indices[i] >> 1]);
+  fclose(f);
+}
+#endif
 
 void WriteRowOfLevelDataBlockAndBTS(uint16 k, uint16 arg0, uint16 arg1, uint16 arg2) {  // 0x8482D6
   uint16 v2 = plm_block_indices[k >> 1];
@@ -2103,18 +2128,33 @@ uint8 PlmSetup_C73A_UpwardsGateShootblock(uint16 j) {  // 0x84C73A
 
 uint8 PlmSetup_C794_GreyDoor(uint16 j) {  // 0x84C794
   int v1 = j >> 1;
+#ifdef SM3DS_DOOR_TRACE
+  uint16 trace_before = level_data[plm_block_indices[v1] >> 1];
+#endif
   plm_variable[v1] = (uint16)(HIBYTE(plm_room_arguments[v1]) & 0x7C) >> 1;
   plm_room_arguments[v1] &= ~0x7C00;
   WriteLevelDataBlockTypeAndBts(plm_block_indices[v1], 0xC044);
+#ifdef SM3DS_DOOR_TRACE
+  TraceDoorPlm("grey", j, trace_before);
+#endif
   return 0;
 }
 
 uint8 PlmSetup_Door_Colored(uint16 j) {  // 0x84C7B1
+#ifdef SM3DS_DOOR_TRACE
+  uint16 trace_before = level_data[plm_block_indices[j >> 1] >> 1];
+#endif
   WriteLevelDataBlockTypeAndBts(plm_block_indices[j >> 1], 0xC044);
+#ifdef SM3DS_DOOR_TRACE
+  TraceDoorPlm("colored", j, trace_before);
+#endif
   return 0;
 }
 
 uint8 PlmSetup_Door_Blue(uint16 j) {  // 0x84C7BB
+#ifdef SM3DS_DOOR_TRACE
+  uint16 trace_before = level_data[plm_block_indices[j >> 1] >> 1];
+#endif
 //  if (sign16(projectile_index))
 //    printf("BUG: projectile_index invalid\n");
   if (!sign16(projectile_index) && (projectile_type[projectile_index >> 1] & 0xF00) == 768) {
@@ -2123,6 +2163,9 @@ uint8 PlmSetup_Door_Blue(uint16 j) {  // 0x84C7BB
     uint16 v1 = plm_block_indices[j >> 1];
     level_data[v1 >> 1] = level_data[v1 >> 1] & 0xFFF | 0x8000;
   }
+#ifdef SM3DS_DOOR_TRACE
+  TraceDoorPlm("blue", j, trace_before);
+#endif
   return 0;
 }
 
