@@ -144,14 +144,20 @@ void BrinstarPipeBug_PreInstr_3(uint16 k) {  // 0xB388E3
 
 void BrinstarPipeBug_PreInstr_4(uint16 k) {  // 0xB3891C
   Enemy_PipeBug *PipeBug = Get_PipeBug(k);
-  if ((PipeBug->pbg_var_A & 0x8000) == 0) {
-    PipeBug->base.x_subpos = PipeBug->base.x_subpos;
-    PipeBug->base.x_pos = PipeBug->base.x_pos + 2;
+  int32 dx = (PipeBug->pbg_var_A & 0x8000) ? -INT16_SHL16(2) : INT16_SHL16(2);
+  bool hit_wall = false;
+  if (g_sprite_viewport_margin) {
+    // The original bug flies until it leaves the 256-pixel view. In the wide
+    // bands it must also stop at solid room tiles and the room boundary.
+    int next_x = (int16)PipeBug->base.x_pos + (dx < 0 ? -2 : 2);
+    int room_right = room_width_in_blocks * 16;
+    hit_wall = next_x - PipeBug->base.x_width < 0 ||
+        next_x + PipeBug->base.x_width >= room_right ||
+        Enemy_MoveRight_IgnoreSlopes(k, dx);
   } else {
-    PipeBug->base.x_subpos = PipeBug->base.x_subpos;
-    PipeBug->base.x_pos = PipeBug->base.x_pos - 2;
+    PipeBug->base.x_pos += dx < 0 ? -2 : 2;
   }
-  if (IsEnemyLeavingScreen(k) & 1) {
+  if (hit_wall || IsEnemyLeavingScreen(k)) {
     PipeBug->base.x_pos = PipeBug->pbg_var_B;
     PipeBug->base.x_subpos = 0;
     uint16 pbg_var_C = PipeBug->pbg_var_C;
