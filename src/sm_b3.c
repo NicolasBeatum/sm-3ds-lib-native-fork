@@ -360,16 +360,33 @@ void NorfairPipeBug_Func_9(void) {  // 0xB38DD2
   }
 }
 
+static void NorfairPipeBug_MoveHorizontal(Enemy_PipeBug *E, int32 dx) {
+  if (!g_sprite_viewport_margin) {
+    AddToHiLo(&E->base.x_pos, &E->base.x_subpos, dx);
+    return;
+  }
+  int next_x = (int16)((__PAIR32__(E->base.x_pos, E->base.x_subpos) + dx) >> 16);
+  int room_right = room_width_in_blocks * 16;
+  if (next_x - E->base.x_width < 0 || next_x + E->base.x_width >= room_right ||
+      Enemy_MoveRight_IgnoreSlopes(cur_enemy_index, dx)) {
+    E->base.properties |= kEnemyProps_Invisible;
+    E->pbg_var_A = FUNC16(NorfairPipeBug_Func_1);
+    E->base.x_pos = E->pbg_var_D;
+    E->base.y_pos = E->pbg_var_E;
+    E->base.x_subpos = E->base.y_subpos = 0;
+  }
+}
+
 void NorfairPipeBug_Func_10(void) {  // 0xB38E14
   Enemy_PipeBug *E = Get_PipeBug(cur_enemy_index);
   int v2 = E->pbg_var_B >> 1;
-  AddToHiLo(&E->base.x_pos, &E->base.x_subpos, __PAIR32__(kCommonEnemySpeeds_Linear[v2 + 2], kCommonEnemySpeeds_Linear[v2 + 3]));
+  NorfairPipeBug_MoveHorizontal(E, __PAIR32__(kCommonEnemySpeeds_Linear[v2 + 2], kCommonEnemySpeeds_Linear[v2 + 3]));
 }
 
 void NorfairPipeBug_Func_11(void) {  // 0xB38E35
   Enemy_PipeBug *E = Get_PipeBug(cur_enemy_index);
   int v2 = E->pbg_var_B >> 1;
-  AddToHiLo(&E->base.x_pos, &E->base.x_subpos, __PAIR32__(kCommonEnemySpeeds_Linear[v2], kCommonEnemySpeeds_Linear[v2 + 1]));
+  NorfairPipeBug_MoveHorizontal(E, __PAIR32__(kCommonEnemySpeeds_Linear[v2], kCommonEnemySpeeds_Linear[v2 + 1]));
 }
 
 void sub_B38E56(void) {  // 0xB38E56
