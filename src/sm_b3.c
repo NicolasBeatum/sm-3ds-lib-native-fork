@@ -474,9 +474,41 @@ void BrinstarYellowPipeBug_Func_2(uint16 k) {  // 0xB38FF5
   }
 }
 
+static uint8 BrinstarYellowPipeBug_MoveHorizontal(uint16 k, int32 dx) {
+  Enemy_PipeBug *E = Get_PipeBug(k);
+  if (!g_sprite_viewport_margin) {
+    AddToHiLo(&E->base.x_pos, &E->base.x_subpos, dx);
+    return 0;
+  }
+  int dir = dx < 0 ? -1 : 1;
+  int next_x = (int16)((__PAIR32__(E->base.x_pos, E->base.x_subpos) + dx) >> 16);
+  int next_edge = next_x + dir * E->base.x_width;
+  int source_edge = (int16)E->pbg_var_07 + dir * E->base.x_width;
+  // The bug begins inside its wall. Let it leave that source block, then
+  // collide normally with every subsequent block in the wider viewport.
+  if ((next_edge >> 4) == (source_edge >> 4)) {
+    AddToHiLo(&E->base.x_pos, &E->base.x_subpos, dx);
+    return 0;
+  }
+  if (next_x - E->base.x_width >= 0 &&
+      next_x + E->base.x_width < room_width_in_blocks * 16 &&
+      !Enemy_MoveRight_IgnoreSlopes(k, dx)) return 0;
+  E->base.x_pos = E->pbg_var_07;
+  E->base.y_pos = E->pbg_var_08;
+  E->base.x_subpos = E->base.y_subpos = 0;
+  E->pbg_var_A = FUNC16(BrinstarYellowPipeBug_Func_1);
+  E->pbg_var_06 = 0;
+  E->base.properties |= kEnemyProps_Invisible;
+  E->base.instruction_timer = 1;
+  E->base.timer = 0;
+  E->base.current_instruction = E->pbg_parameter_1 ?
+      addr_kBrinstarYellowPipeBug_Ilist_8EFC : addr_kBrinstarYellowPipeBug_Ilist_8F24;
+  return 1;
+}
+
 void BrinstarYellowPipeBug_Func_3(void) {  // 0xB39028
   Enemy_PipeBug *E = Get_PipeBug(cur_enemy_index);
-  BrinstarYellowPipeBug_Func_4(cur_enemy_index);
+  if (BrinstarYellowPipeBug_Func_4(cur_enemy_index)) return;
   if (CheckIfEnemyIsOnScreen()) {
     E->base.x_pos = E->pbg_var_07;
     E->base.y_pos = E->pbg_var_08;
@@ -502,15 +534,15 @@ void BrinstarYellowPipeBug_Func_3(void) {  // 0xB39028
   }
 }
 
-void BrinstarYellowPipeBug_Func_4(uint16 k) {  // 0xB390A1
+uint8 BrinstarYellowPipeBug_Func_4(uint16 k) {  // 0xB390A1
   Enemy_PipeBug *E = Get_PipeBug(k);
-  AddToHiLo(&E->base.x_pos, &E->base.x_subpos, __PAIR32__(E->pbg_var_03, E->pbg_var_02));
+  return BrinstarYellowPipeBug_MoveHorizontal(k, __PAIR32__(E->pbg_var_03, E->pbg_var_02));
 }
 
 void BrinstarYellowPipeBug_Func_5(void) {  // 0xB390BD
   Enemy_PipeBug *E = Get_PipeBug(cur_enemy_index);
 
-  BrinstarYellowPipeBug_Func_6(cur_enemy_index);
+  if (BrinstarYellowPipeBug_Func_6(cur_enemy_index)) return;
   if (CheckIfEnemyIsOnScreen()) {
     E->base.x_pos = E->pbg_var_07;
     E->base.y_pos = E->pbg_var_08;
@@ -536,9 +568,9 @@ void BrinstarYellowPipeBug_Func_5(void) {  // 0xB390BD
   }
 }
 
-void BrinstarYellowPipeBug_Func_6(uint16 k) {  // 0xB3913A
+uint8 BrinstarYellowPipeBug_Func_6(uint16 k) {  // 0xB3913A
   Enemy_PipeBug *E = Get_PipeBug(k);
-  AddToHiLo(&E->base.x_pos, &E->base.x_subpos, __PAIR32__(E->pbg_var_01, E->pbg_var_00));
+  return BrinstarYellowPipeBug_MoveHorizontal(k, __PAIR32__(E->pbg_var_01, E->pbg_var_00));
 }
 
 void BrinstarYellowPipeBug_Func_7(void) {  // 0xB3915A
@@ -555,7 +587,7 @@ void BrinstarYellowPipeBug_Func_7(void) {  // 0xB3915A
     E->base.current_instruction = addr_kBrinstarYellowPipeBug_Ilist_8EFC;
     E->base.properties |= kEnemyProps_Invisible;
   } else {
-    BrinstarYellowPipeBug_Func_4(cur_enemy_index);
+    if (BrinstarYellowPipeBug_Func_4(cur_enemy_index)) return;
     if (E->pbg_var_F) {
       BrinstarYellowPipeBug_Func_10(cur_enemy_index);
     } else {
@@ -586,7 +618,7 @@ void BrinstarYellowPipeBug_Func_8(void) {  // 0xB391D8
     E->base.current_instruction = addr_kBrinstarYellowPipeBug_Ilist_8F24;
     E->base.properties |= kEnemyProps_Invisible;
   } else {
-    BrinstarYellowPipeBug_Func_6(cur_enemy_index);
+    if (BrinstarYellowPipeBug_Func_6(cur_enemy_index)) return;
     if (E->pbg_var_F) {
       BrinstarYellowPipeBug_Func_10(cur_enemy_index);
     } else {
