@@ -738,6 +738,9 @@ Snes *SnesInit(const char *filename) {
 
   bool loaded = loadRom(filename, g_snes);
   if (!loaded) {
+    snes_free(g_snes);
+    g_snes = NULL;
+    g_cpu = NULL;
     return NULL;
   }
 

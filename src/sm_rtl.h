@@ -119,6 +119,7 @@ void RtlPushApuState();
 bool RtlRunFrame(int inputs);
 void RtlReadSram();
 void RtlWriteSram();
+bool RtlSetSramPath(const char *path);
 void RtlSaveSnapshot(const char *filename, bool saving_with_bug);
 void RtlUpdateSnesPatchForBugfix();
 extern uint16 currently_installed_bug_fix_counter;

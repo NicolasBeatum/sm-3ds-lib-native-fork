@@ -48,6 +48,8 @@ void snes_free(Snes* snes) {
   cpu_free(snes->cpu);
   apu_free(snes->apu);
   dma_free(snes->dma);
+  if (snes->my_ppu != snes->ppu)
+    ppu_free(snes->my_ppu);
   ppu_free(snes->ppu);
   cart_free(snes->cart);
   input_free(snes->input1);
@@ -457,4 +459,3 @@ void snes_cpuWrite(Snes* snes, uint32_t adr, uint8_t val) {
   snes->cpuCyclesLeft += 8;
   snes_write(snes, adr, val);
 }
-
