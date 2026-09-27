@@ -147,13 +147,36 @@ void BrinstarPipeBug_PreInstr_4(uint16 k) {  // 0xB3891C
   int32 dx = (PipeBug->pbg_var_A & 0x8000) ? -INT16_SHL16(2) : INT16_SHL16(2);
   bool hit_wall = false;
   if (g_sprite_viewport_margin) {
-    // The original bug flies until it leaves the 256-pixel view. In the wide
-    // bands it must also stop at solid room tiles and the room boundary.
+    // The bug starts inside its pipe. Ignore collisions with those source
+    // tiles while it leaves, but still stop at other walls in the wide view.
     int next_x = (int16)PipeBug->base.x_pos + (dx < 0 ? -2 : 2);
     int room_right = room_width_in_blocks * 16;
-    hit_wall = next_x - PipeBug->base.x_width < 0 ||
-        next_x + PipeBug->base.x_width >= room_right ||
-        Enemy_MoveRight_IgnoreSlopes(k, dx);
+    if (next_x - PipeBug->base.x_width < 0 ||
+        next_x + PipeBug->base.x_width >= room_right) {
+      hit_wall = true;
+    } else {
+      uint16 old_x = PipeBug->base.x_pos;
+      uint16 old_subpos = PipeBug->base.x_subpos;
+      if (Enemy_MoveRight_IgnoreSlopes(k, dx)) {
+        int source_x = (int16)PipeBug->pbg_var_B;
+        int source_col = source_x >> 4;
+        int source_row = (int16)PipeBug->pbg_var_C >> 4;
+        int hit_col = cur_block_index % room_width_in_blocks;
+        int hit_row = cur_block_index / room_width_in_blocks;
+        int distance = next_x - source_x;
+        if (distance < 0) distance = -distance;
+        bool source_pipe = distance <= 32 &&
+            hit_col >= source_col - 1 && hit_col <= source_col + 1 &&
+            hit_row >= source_row - 1 && hit_row <= source_row + 1;
+        if (source_pipe) {
+          PipeBug->base.x_pos = old_x;
+          PipeBug->base.x_subpos = old_subpos;
+          AddToHiLo(&PipeBug->base.x_pos, &PipeBug->base.x_subpos, dx);
+        } else {
+          hit_wall = true;
+        }
+      }
+    }
   } else {
     PipeBug->base.x_pos += dx < 0 ? -2 : 2;
   }
