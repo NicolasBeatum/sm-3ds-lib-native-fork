@@ -22,6 +22,17 @@ uint8 g_ram[0x20000];
 uint8 g_sprite_viewport_margin;
 uint8 *g_sram;
 const uint8 *g_rom;
+static char g_sram_path[256] = "saves/sm.srm";
+
+bool RtlSetSramPath(const char *path) {
+  if (!path)
+    return false;
+  size_t length = strlen(path);
+  if (!length || length >= sizeof(g_sram_path) - sizeof(".bak"))
+    return false;
+  memcpy(g_sram_path, path, length + 1);
+  return true;
+}
 
 void RtlSetSpriteViewportMargin(uint8 margin) {
   g_sprite_viewport_margin = margin;
@@ -737,10 +748,10 @@ void RtlCheat(char c) {
 }
 
 void RtlReadSram(void) {
-  FILE *f = fopen("saves/sm.srm", "rb");
+  FILE *f = fopen(g_sram_path, "rb");
   if (f) {
     if (fread(g_sram, 1, 8192, f) != 8192)
-      fprintf(stderr, "Error reading saves/sm.srm\n");
+      fprintf(stderr, "Error reading %s\n", g_sram_path);
     fclose(f);
     RtlSynchronizeWholeState();
     ByteArray_Resize(&state_recorder.base_snapshot, 8192);
@@ -749,12 +760,14 @@ void RtlReadSram(void) {
 }
 
 void RtlWriteSram(void) {
-  rename("saves/sm.srm", "saves/sm.srm.bak");
-  FILE *f = fopen("saves/sm.srm", "wb");
+  char backup_path[sizeof(g_sram_path) + sizeof(".bak")];
+  snprintf(backup_path, sizeof(backup_path), "%s.bak", g_sram_path);
+  rename(g_sram_path, backup_path);
+  FILE *f = fopen(g_sram_path, "wb");
   if (f) {
     fwrite(g_sram, 1, 8192, f);
     fclose(f);
   } else {
-    fprintf(stderr, "Unable to write saves/sm.srm\n");
+    fprintf(stderr, "Unable to write %s\n", g_sram_path);
   }
 }
