@@ -577,8 +577,8 @@ void DetermineWhichEnemiesToProcess(void) {  // 0xA08EB6
           v1->enemy_ptr = 0;
         } else if ((properties & 0x800) != 0
                    || (v1->ai_handler_bits & 4) != 0
-                   || (int16)(v1->x_width + v1->x_pos - layer1_x_pos) >= 0
-                   && (int16)(v1->x_width + layer1_x_pos + 256 - v1->x_pos) >= 0
+                   || (int16)(v1->x_width + v1->x_pos - layer1_x_pos) >= -(int)g_sprite_viewport_margin
+                   && (int16)(v1->x_width + layer1_x_pos + 256 - v1->x_pos) >= -(int)g_sprite_viewport_margin
                    && (int16)(v1->y_pos + 8 - layer1_y_pos) >= 0
                    && (int16)(layer1_y_pos + 248 - v1->y_pos) >= 0) {
           uint16 v3 = active_enemy_indexes_write_ptr;
@@ -2996,7 +2996,8 @@ PairU16 EnemyFunc_ACA8(Point16U base_pt, Point16U samus_pt) {  // 0xA0ACA8
 
 uint16 CheckIfEnemyIsOnScreen(void) {  // 0xA0AD70
   EnemyData *v0 = gEnemyData(cur_enemy_index);
-  return (int16)(v0->x_pos - layer1_x_pos) < 0 || (int16)(layer1_x_pos + 256 - v0->x_pos) < 0 || 
+  return (int16)(v0->x_pos - layer1_x_pos) < -(int)g_sprite_viewport_margin ||
+      (int16)(layer1_x_pos + 256 - v0->x_pos) < -(int)g_sprite_viewport_margin ||
       (int16)(v0->y_pos - layer1_y_pos) < 0 || (int16)(layer1_y_pos + 256 - v0->y_pos) < 0;
 }
 
@@ -3008,7 +3009,9 @@ uint16 EnemyFunc_ADA3(uint16 a) {  // 0xA0ADA3
 
 uint16 EnemyWithNormalSpritesIsOffScreen(void) {  // 0xA0ADE7
   EnemyData *E = gEnemyData(cur_enemy_index);
-  return (int16)(E->x_width + E->x_pos - layer1_x_pos) < 0 || (int16)(E->x_width + layer1_x_pos + 256 - E->x_pos) < 0 ||
+  // Keep drawn enemies visible for the full horizontal viewport.
+  return (int16)(E->x_width + E->x_pos - layer1_x_pos) < -(int)g_sprite_viewport_margin ||
+      (int16)(E->x_width + layer1_x_pos + 256 - E->x_pos) < -(int)g_sprite_viewport_margin ||
       (int16)(E->y_pos + 8 - layer1_y_pos) < 0 || (int16)(layer1_y_pos + 248 - E->y_pos) < 0;
 }
 
@@ -3386,7 +3389,8 @@ uint8 IsEnemyLeavingScreen(uint16 k) {  // 0xA0C18E
   x_pos = E->x_pos;
   if (x_pos >= 0) {
     v3 = E->x_width + x_pos - layer1_x_pos;
-    if (v3 >= 0 && (int16)(v3 - 256 - E->x_width) < 0)
+    if (v3 >= -(int)g_sprite_viewport_margin &&
+        (int16)(v3 - 256 - E->x_width) < (int)g_sprite_viewport_margin)
       return 0;
   }
   return 1;

@@ -19,8 +19,13 @@ static void RtlSaveMusicStateToRam_Locked();
 static void RtlRestoreMusicAfterLoad_Locked(bool is_reset);
 
 uint8 g_ram[0x20000];
+uint8 g_sprite_viewport_margin;
 uint8 *g_sram;
 const uint8 *g_rom;
+
+void RtlSetSpriteViewportMargin(uint8 margin) {
+  g_sprite_viewport_margin = margin;
+}
 
 static uint8 *g_rtl_memory_ptr;
 static RunFrameFunc *g_rtl_runframe;

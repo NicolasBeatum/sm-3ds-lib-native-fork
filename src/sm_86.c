@@ -2793,8 +2793,8 @@ void CallNorfairLavaquakeRocksFunc(uint32 ea, uint16 k) {
 
 uint16 EprojPreInstr_NorfairLavaquakeRocks_Inner2(uint16 k) {  // 0x86BD2A
   int v1 = k >> 1;
-  return (int16)(eproj_x_pos[v1] - layer1_x_pos) < 0
-    || (int16)(layer1_x_pos + 256 - eproj_x_pos[v1]) < 0
+  return (int16)(eproj_x_pos[v1] - layer1_x_pos) < -(int)g_sprite_viewport_margin
+    || (int16)(layer1_x_pos + 256 - eproj_x_pos[v1]) < -(int)g_sprite_viewport_margin
     || (int16)(eproj_y_pos[v1] - layer1_y_pos) < 0
     || (int16)(layer1_y_pos + 256 - eproj_y_pos[v1]) < 0;
 }
@@ -4051,8 +4051,8 @@ void EprojPreInstr_SpikeShootingPlantSpikes(uint16 k) {
 
 uint16 EprojPreInstrHelper_SpikeShootingPlantSpikes_Func2(uint16 k) {  // 0x86DACE
   int v1 = k >> 1;
-  return (int16)(eproj_x_pos[v1] - layer1_x_pos) < 0
-    || (int16)(layer1_x_pos + 256 - eproj_x_pos[v1]) < 0
+  return (int16)(eproj_x_pos[v1] - layer1_x_pos) < -(int)g_sprite_viewport_margin
+    || (int16)(layer1_x_pos + 256 - eproj_x_pos[v1]) < -(int)g_sprite_viewport_margin
     || (int16)(eproj_y_pos[v1] - layer1_y_pos) < 0
     || (int16)(layer1_y_pos + 256 - eproj_y_pos[v1]) < 0;
 }
@@ -4094,8 +4094,8 @@ void EprojPreInstr_DBF2_MoveX2(uint16 k) {  // 0x86DB8C
 
 uint16 EprojPreInstrHelper_DBF2_Func2(uint16 k) {  // 0x86DBC2
   int v1 = k >> 1;
-  return (int16)(eproj_x_pos[v1] - layer1_x_pos) < 0
-    || (int16)(layer1_x_pos + 256 - eproj_x_pos[v1]) < 0
+  return (int16)(eproj_x_pos[v1] - layer1_x_pos) < -(int)g_sprite_viewport_margin
+    || (int16)(layer1_x_pos + 256 - eproj_x_pos[v1]) < -(int)g_sprite_viewport_margin
     || (int16)(eproj_y_pos[v1] - layer1_y_pos) < 0
     || (int16)(layer1_y_pos + 256 - eproj_y_pos[v1]) < 0;
 }
@@ -4225,8 +4225,8 @@ void Eproj_NamiFuneFireball_After(uint16 v0) {  // 0x86DF94
 
 uint16 sub_86DFA0(uint16 k) {  // 0x86DFA0
   int v1 = k >> 1;
-  return (int16)(eproj_x_pos[v1] - layer1_x_pos) < 0
-      || (int16)(layer1_x_pos + 256 - eproj_x_pos[v1]) < 0;
+  return (int16)(eproj_x_pos[v1] - layer1_x_pos) < -(int)g_sprite_viewport_margin
+      || (int16)(layer1_x_pos + 256 - eproj_x_pos[v1]) < -(int)g_sprite_viewport_margin;
 }
 
 const uint8 *EprojInstr_DFEA(uint16 k, const uint8 *epjp) {  // 0x86DFEA
@@ -4283,8 +4283,8 @@ void sub_86E0A4(uint16 v0) {  // 0x86E0A4
 
 uint16 sub_86E0B0(uint16 k) {  // 0x86E0B0
   int v1 = k >> 1;
-  return (int16)(eproj_x_pos[v1] - layer1_x_pos) < 0
-    || (int16)(layer1_x_pos + 256 - eproj_x_pos[v1]) < 0
+  return (int16)(eproj_x_pos[v1] - layer1_x_pos) < -(int)g_sprite_viewport_margin
+    || (int16)(layer1_x_pos + 256 - eproj_x_pos[v1]) < -(int)g_sprite_viewport_margin
     || (int16)(eproj_y_pos[v1] - layer1_y_pos) < 0
     || (int16)(layer1_y_pos + 256 - eproj_y_pos[v1]) < 0;
 }
@@ -4363,8 +4363,8 @@ static void EprojInit_SaveStationElectricity(uint16 j) {  // 0x86E6AD
 
 static uint16 CheckIfEprojIsOffScreen(uint16 k) {  // 0x86E6E0
   int v1 = k >> 1;
-  if ((int16)(eproj_x_pos[v1] - layer1_x_pos) >= 0) {
-    if ((int16)(eproj_x_pos[v1] - (layer1_x_pos + 256)) < 0
+  if ((int16)(eproj_x_pos[v1] - layer1_x_pos) >= -(int)g_sprite_viewport_margin) {
+    if ((int16)(eproj_x_pos[v1] - (layer1_x_pos + 256)) < (int)g_sprite_viewport_margin
         && (int16)(eproj_y_pos[v1] - layer1_y_pos) >= 0) {
       if ((int16)(eproj_y_pos[v1] - (layer1_y_pos + 256)) < 0)
         return 0;
@@ -4553,8 +4553,8 @@ void sub_86EC0C(uint16 k) {  // 0x86EC0C
 
 uint16 sub_86EC18(uint16 k) {  // 0x86EC18
   int v1 = k >> 1;
-  return (int16)(eproj_x_pos[v1] - layer1_x_pos) < 0
-    || (int16)(layer1_x_pos + 256 - eproj_x_pos[v1]) < 0
+  return (int16)(eproj_x_pos[v1] - layer1_x_pos) < -(int)g_sprite_viewport_margin
+    || (int16)(layer1_x_pos + 256 - eproj_x_pos[v1]) < -(int)g_sprite_viewport_margin
     || (int16)(eproj_y_pos[v1] - layer1_y_pos) < 0
     || (int16)(layer1_y_pos + 256 - eproj_y_pos[v1]) < 0;
 }
@@ -5291,4 +5291,3 @@ static const uint8 *CallEprojInstr(uint32 ea, uint16 k, const uint8 *j) {
   default: Unreachable(); return NULL;
   }
 }
-
