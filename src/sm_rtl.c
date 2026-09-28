@@ -414,6 +414,7 @@ enum {
 };
 
 bool RtlRunFrame(int inputs) {
+  memset(g_oam_unwrapped_valid, 0, sizeof(g_oam_unwrapped_valid));
   // Avoid up/down and left/right from being pressed at the same time
   if ((inputs & 0x30) == 0x30) inputs ^= 0x30;
   if ((inputs & 0xc0) == 0xc0) inputs ^= 0xc0;
