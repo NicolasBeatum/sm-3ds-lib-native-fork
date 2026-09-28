@@ -8,6 +8,11 @@
 typedef struct Snes Snes;
 extern Snes *g_snes;
 extern bool g_fail;
+#ifdef SM3DS_PHASE_DIAG
+extern uint64_t g_diag_logic_ticks;
+extern uint64_t g_diag_ppu_ticks;
+extern bool g_diag_phase_valid;
+#endif
 
 typedef struct Snes Snes;
 

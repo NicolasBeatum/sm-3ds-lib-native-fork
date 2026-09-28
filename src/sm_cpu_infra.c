@@ -13,11 +13,18 @@
 #include "util.h"
 #include "enemy_types.h"
 #include <time.h>
-#ifdef SM3DS_PROFILE
+#if defined(SM3DS_PROFILE) || defined(SM3DS_PHASE_DIAG)
 #include "SDL2/SDL.h"
+#endif
+#ifdef SM3DS_PROFILE
 uint64_t g_profile_game_ticks;
 uint64_t g_profile_ppu_ticks;
 uint64_t g_profile_hdma_ticks;
+#endif
+#ifdef SM3DS_PHASE_DIAG
+uint64_t g_diag_logic_ticks;
+uint64_t g_diag_ppu_ticks;
+bool g_diag_phase_valid;
 #endif
 
 void RtlRunFrameCompare(uint16 input, int run_what);
@@ -1204,6 +1211,9 @@ getout:
 
 void RtlRunFrameCompare(uint16 input, int run_what) {
   g_snes->input1->currentState = input;
+#ifdef SM3DS_PHASE_DIAG
+  g_diag_phase_valid = false;
+#endif
 
   if (g_runmode == RM_THEIRS) {
     RunOneFrameOfGame_Emulated();
@@ -1212,17 +1222,29 @@ void RtlRunFrameCompare(uint16 input, int run_what) {
   } else if (g_runmode == RM_MINE) {
     g_use_my_apu_code = true;
     // g_snes->runningWhichVersion = 0xff;
-#ifdef SM3DS_PROFILE
+#if defined(SM3DS_PROFILE) || defined(SM3DS_PHASE_DIAG)
     uint64_t before = SDL_GetPerformanceCounter();
 #endif
     RunOneFrameOfGame();
-#ifdef SM3DS_PROFILE
+#if defined(SM3DS_PROFILE) || defined(SM3DS_PHASE_DIAG)
     uint64_t after = SDL_GetPerformanceCounter();
+#endif
+#ifdef SM3DS_PHASE_DIAG
+    g_diag_logic_ticks = after - before;
+#endif
+#ifdef SM3DS_PROFILE
     g_profile_game_ticks += after - before;
 #endif
     DrawFrameToPpu();
+#if defined(SM3DS_PROFILE) || defined(SM3DS_PHASE_DIAG)
+    uint64_t ppu_ticks = SDL_GetPerformanceCounter() - after;
+#endif
+#ifdef SM3DS_PHASE_DIAG
+    g_diag_ppu_ticks = ppu_ticks;
+    g_diag_phase_valid = true;
+#endif
 #ifdef SM3DS_PROFILE
-    g_profile_ppu_ticks += SDL_GetPerformanceCounter() - after;
+    g_profile_ppu_ticks += ppu_ticks;
 #endif
     // g_snes->runningWhichVersion = 0;
   } else {
