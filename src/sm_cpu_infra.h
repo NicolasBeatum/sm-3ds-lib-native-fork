@@ -12,6 +12,7 @@ extern bool g_fail;
 typedef struct Snes Snes;
 
 Snes *SnesInit(const char *filename);
+const char *SnesRomLoadError(void);
 
 int RunAsmCode(uint32 pc, uint16 a, uint16 x, uint16 y, int flags);
 bool ProcessHook(uint32 v);

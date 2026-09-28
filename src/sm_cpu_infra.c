@@ -697,7 +697,11 @@ int RunAsmCode(uint32 pc, uint16 a, uint16 x, uint16 y, int flags) {
   return g_calling_asm_from_c_ret;
 }
 
-static bool g_spanish_translation_v1;
+static const char *g_rom_load_error;
+
+const char *SnesRomLoadError(void) {
+  return g_rom_load_error ? g_rom_load_error : "INVALID OR UNSUPPORTED ROM";
+}
 
 static uint32 RomCrc32(const uint8 *data, size_t length) {
   uint32 table[256];
@@ -714,21 +718,25 @@ static uint32 RomCrc32(const uint8 *data, size_t length) {
 }
 
 static bool loadRom(const char *name, Snes *snes) {
+  g_rom_load_error = NULL;
   size_t length = 0;
   uint8_t *file = NULL;
   file = ReadWholeFile(name, &length);
   if (file == NULL) {
     puts("Failed to read file");
+    g_rom_load_error = "COULD NOT READ ROM";
     return false;
   }
-  // Klint/Pacochan's Spanish 1.0 IPS, applied to the unheadered JU ROM.
-  // Its data at $85:9693-$85:9697 collides with two runtime SNES helpers.
-  // Match the complete image so other ROM hacks keep the original layout.
-  static const uint8 kSpanishSignature[] = { 0xf2, 0x3c, 0xe8, 0x3c, 0x4e };
-  g_spanish_translation_v1 = length == 0x300000 &&
-      memcmp(file + 0x29693, kSpanishSignature, sizeof(kSpanishSignature)) == 0 &&
-      RomCrc32(file, length) == 0xcb6ef725u;
+  // Spanish 1.0 IPS addresses include a 512-byte copier header. Applying it
+  // directly to a headerless ROM corrupts the intro's cinematic instructions.
+  if (length == 0x300000 && RomCrc32(file, length) == 0xcb6ef725u) {
+    g_rom_load_error = "SPANISH IPS NEEDS 512B HEADER";
+    free(file);
+    return false;
+  }
   bool result = snes_loadRom(snes, file, (int)length);
+  if (!result)
+    g_rom_load_error = "INVALID OR UNSUPPORTED ROM";
   free(file);
   return result;
 }
@@ -891,18 +899,12 @@ Snes *SnesInit(const char *filename) {
   { uint8 t[] = { 0x20, 0x60, 0x96 }; PatchBytes(0x8583BA, t, sizeof(t)); } // MsgBoxMakeHdmaTable
 
   // Patch GunshipTop_13 to not block
-  // Spanish 1.0 uses $85:9693-$85:9697. Move only the overlapping helpers
-  // into verified empty ROM space at $85:9A00 for this exact ROM revision.
-  const uint8 msgbox_poll_lo = g_spanish_translation_v1 ? 0x00 : 0x81;
-  const uint8 msgbox_poll_hi = g_spanish_translation_v1 ? 0x9a : 0x96;
-  const uint8 msgbox_org_lo = g_spanish_translation_v1 ? 0x20 : 0x95;
-  const uint8 msgbox_org_hi = g_spanish_translation_v1 ? 0x9a : 0x96;
-  { uint8 t[] = { 0x22, msgbox_poll_lo, msgbox_poll_hi, 0x85, 0xc9, 0xff, 0xff, 0xd0, 0x04, 0x5c, 0x5f, 0xab, 0xa2, 0x5c, 0x26, 0xab, 0xa2 }; PatchBytes(0x859670, t, sizeof(t)); } // DisplayMessageBox_DoubleRet
-  { uint8 t[] = { 0xcd, 0x1f, 0x1c, 0xd0, 0x08, 0x9c, 0x1f, 0x1c, 0xad, 0xf9, 0x05, 0x6b, 0xff, 0x8d, 0xc8, 0x0d, 0xa9, 0xff, 0xff, 0x6b }; PatchBytes(g_spanish_translation_v1 ? 0x859a00 : 0x859681, t, sizeof(t)); } // DisplayMessageBox_Poll
+  { uint8 t[] = { 0x22, 0x81, 0x96, 0x85, 0xc9, 0xff, 0xff, 0xd0, 0x04, 0x5c, 0x5f, 0xab, 0xa2, 0x5c, 0x26, 0xab, 0xa2 }; PatchBytes(0x859670, t, sizeof(t)); } // DisplayMessageBox_DoubleRet
+  { uint8 t[] = { 0xcd, 0x1f, 0x1c, 0xd0, 0x08, 0x9c, 0x1f, 0x1c, 0xad, 0xf9, 0x05, 0x6b, 0xff, 0x8d, 0xc8, 0x0d, 0xa9, 0xff, 0xff, 0x6b }; PatchBytes(0x859681, t, sizeof(t)); } // DisplayMessageBox_Poll
   { uint8 t[] = { 0x5c, 0x70, 0x96, 0x85 }; PatchBytes(0xa2ab22, t, sizeof(t)); } // GunshipTop_13
 
   // EnemyMain_WithCheckMsgBox
-  { uint8 t[] = { 0x22, 0xd4, 0x8f, 0xa0, 0xad, 0xc8, 0x0d, 0xf0, 0x07, 0x22, msgbox_org_lo, msgbox_org_hi, 0x85, 0x9c, 0xc8, 0x0d, 0x6b }; PatchBytes(0x8596a0, t, sizeof(t)); }
+  { uint8 t[] = { 0x22, 0xd4, 0x8f, 0xa0, 0xad, 0xc8, 0x0d, 0xf0, 0x07, 0x22, 0x95, 0x96, 0x85, 0x9c, 0xc8, 0x0d, 0x6b }; PatchBytes(0x8596a0, t, sizeof(t)); }
   { uint8 t[] = { 0x22, 0xa0, 0x96, 0x85 }; PatchBytes(0x828b65, t, sizeof(t)); } // EnemyMain -> EnemyMain_WithCheckMsgBox
 
   // CloseMessageBox_ResetMsgBoxIdx
@@ -910,11 +912,11 @@ Snes *SnesInit(const char *filename) {
   { uint8 t[] = { 0x20, 0xC0, 0x96 }; PatchBytes(0x8580E5, t, sizeof(t)); }
 
   // ProcessPlm_CheckMessage
-  { uint8 t[] = { 0xad, 0xc8, 0x0d, 0xf0, 0x11, 0x98, 0x9d, 0x27, 0x1d, 0xad, 0xc8, 0x0d, 0x22, msgbox_org_lo, msgbox_org_hi, 0x85, 0x9c, 0xc8, 0x0d, 0xbc, 0x27, 0x1d, 0x4c, 0xee, 0x85 }; PatchBytes(0x84EFDC, t, sizeof(t)); }
+  { uint8 t[] = { 0xad, 0xc8, 0x0d, 0xf0, 0x11, 0x98, 0x9d, 0x27, 0x1d, 0xad, 0xc8, 0x0d, 0x22, 0x95, 0x96, 0x85, 0x9c, 0xc8, 0x0d, 0xbc, 0x27, 0x1d, 0x4c, 0xee, 0x85 }; PatchBytes(0x84EFDC, t, sizeof(t)); }
   { uint8 t[] = { 0xf4, 0xdb, 0xef }; PatchBytes(0x8485f7, t, sizeof(t)); }
 
   // Hook DisplayMessageBox so it writes to queued_message_box_index instead
-  { uint8 t[] = { 0x08, 0x8b, 0xda, 0x5a, 0x5c, 0x84, 0x80, 0x85 }; PatchBytes(g_spanish_translation_v1 ? 0x859a20 : 0x859695, t, sizeof(t)); } // DisplayMessageBox_Org
+  { uint8 t[] = { 0x08, 0x8b, 0xda, 0x5a, 0x5c, 0x84, 0x80, 0x85 }; PatchBytes(0x859695, t, sizeof(t)); } // DisplayMessageBox_Org
   { uint8 t[] = { 0x8d, 0xc8, 0x0d, 0x6b }; PatchBytes(0x858080, t, sizeof(t)); } // Hook
 
   // PlmInstr_ActivateSaveStationAndGotoIfNo_Fixed
