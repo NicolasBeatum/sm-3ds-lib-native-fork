@@ -8,6 +8,9 @@ extern void RtlApuWrite(uint32 adr, uint8 val);
 extern int snes_frame_counter;
 void RtlSetSpriteViewportMargin(uint8 margin);
 extern uint8 g_sprite_viewport_margin;
+/* Native spritemap positions before the SNES OAM X coordinate wraps at 512. */
+extern int16 g_oam_unwrapped_x[128];
+extern uint8 g_oam_unwrapped_valid[128];
 
 extern uint8 *g_sram;
 extern const uint8 *g_rom;

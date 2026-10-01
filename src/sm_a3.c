@@ -884,7 +884,39 @@ void CallRoachFunc(uint32 ea) {
 
 void Roach_Main(void) {  // 0xA3A2D0
   Enemy_Roach *E = Get_Roach(cur_enemy_index);
+  uint16 old_x = E->base.x_pos, old_x_sub = E->base.x_subpos;
+  uint16 old_y = E->base.y_pos, old_y_sub = E->base.y_subpos;
   CallRoachFunc(E->roach_var_B | 0xA30000);
+  if (!g_sprite_viewport_margin ||
+      (old_x == E->base.x_pos && old_x_sub == E->base.x_subpos &&
+       old_y == E->base.y_pos && old_y_sub == E->base.y_subpos))
+    return;
+
+  // Sbugs are ambient enemies and may fly through interior blocks. The wider
+  // viewport keeps them active past the original screen edge; only stop them
+  // from leaving the room or entering a scroll-locked screen.
+  int next_x = (int16)E->base.x_pos, next_y = (int16)E->base.y_pos;
+  bool blocked = next_x - E->base.x_width < 0 ||
+                 next_x + E->base.x_width >= room_width_in_blocks * 16 ||
+                 next_y - E->base.y_height < 0 ||
+                 next_y + E->base.y_height >= room_height_in_blocks * 16;
+  if (!blocked && room_width_in_scrolls && room_height_in_scrolls &&
+      room_width_in_scrolls * room_height_in_scrolls <= 512 &&
+      room_width_in_blocks == room_width_in_scrolls * 16) {
+    int old_col = old_x >> 8, old_row = old_y >> 8;
+    int col = next_x >> 8, row = next_y >> 8;
+    if (old_col >= 0 && old_col < room_width_in_scrolls &&
+        old_row >= 0 && old_row < room_height_in_scrolls &&
+        col >= 0 && col < room_width_in_scrolls &&
+        row >= 0 && row < room_height_in_scrolls &&
+        scrolls[old_row * room_width_in_scrolls + old_col] &&
+        !scrolls[row * room_width_in_scrolls + col])
+      blocked = true;
+  }
+
+  if (blocked) {
+    E->base.enemy_ptr = 0;
+  }
 }
 
 void Roach_Func_9(void) {  // 0xA3A2D7

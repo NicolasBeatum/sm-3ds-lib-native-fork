@@ -13,11 +13,18 @@
 #include "util.h"
 #include "enemy_types.h"
 #include <time.h>
-#ifdef SM3DS_PROFILE
+#if defined(SM3DS_PROFILE) || defined(SM3DS_PHASE_DIAG)
 #include "SDL2/SDL.h"
+#endif
+#ifdef SM3DS_PROFILE
 uint64_t g_profile_game_ticks;
 uint64_t g_profile_ppu_ticks;
 uint64_t g_profile_hdma_ticks;
+#endif
+#ifdef SM3DS_PHASE_DIAG
+uint64_t g_diag_logic_ticks;
+uint64_t g_diag_ppu_ticks;
+bool g_diag_phase_valid;
 #endif
 
 void RtlRunFrameCompare(uint16 input, int run_what);
@@ -697,15 +704,46 @@ int RunAsmCode(uint32 pc, uint16 a, uint16 x, uint16 y, int flags) {
   return g_calling_asm_from_c_ret;
 }
 
+static const char *g_rom_load_error;
+
+const char *SnesRomLoadError(void) {
+  return g_rom_load_error ? g_rom_load_error : "INVALID OR UNSUPPORTED ROM";
+}
+
+static uint32 RomCrc32(const uint8 *data, size_t length) {
+  uint32 table[256];
+  for (uint32 i = 0; i < 256; i++) {
+    uint32 value = i;
+    for (int bit = 0; bit < 8; bit++)
+      value = (value >> 1) ^ ((value & 1) ? 0xedb88320u : 0);
+    table[i] = value;
+  }
+  uint32 crc = ~0u;
+  for (size_t i = 0; i < length; i++)
+    crc = table[(crc ^ data[i]) & 0xff] ^ (crc >> 8);
+  return ~crc;
+}
+
 static bool loadRom(const char *name, Snes *snes) {
+  g_rom_load_error = NULL;
   size_t length = 0;
   uint8_t *file = NULL;
   file = ReadWholeFile(name, &length);
   if (file == NULL) {
     puts("Failed to read file");
+    g_rom_load_error = "COULD NOT READ ROM";
+    return false;
+  }
+  // Spanish 1.0 IPS addresses include a 512-byte copier header. Applying it
+  // directly to a headerless ROM corrupts the intro's cinematic instructions.
+  if (length == 0x300000 && RomCrc32(file, length) == 0xcb6ef725u) {
+    g_rom_load_error = "SPANISH IPS NEEDS 512B HEADER";
+    free(file);
     return false;
   }
   bool result = snes_loadRom(snes, file, (int)length);
+  if (!result)
+    g_rom_load_error = "INVALID OR UNSUPPORTED ROM";
   free(file);
   return result;
 }
@@ -1173,6 +1211,9 @@ getout:
 
 void RtlRunFrameCompare(uint16 input, int run_what) {
   g_snes->input1->currentState = input;
+#ifdef SM3DS_PHASE_DIAG
+  g_diag_phase_valid = false;
+#endif
 
   if (g_runmode == RM_THEIRS) {
     RunOneFrameOfGame_Emulated();
@@ -1181,17 +1222,29 @@ void RtlRunFrameCompare(uint16 input, int run_what) {
   } else if (g_runmode == RM_MINE) {
     g_use_my_apu_code = true;
     // g_snes->runningWhichVersion = 0xff;
-#ifdef SM3DS_PROFILE
+#if defined(SM3DS_PROFILE) || defined(SM3DS_PHASE_DIAG)
     uint64_t before = SDL_GetPerformanceCounter();
 #endif
     RunOneFrameOfGame();
-#ifdef SM3DS_PROFILE
+#if defined(SM3DS_PROFILE) || defined(SM3DS_PHASE_DIAG)
     uint64_t after = SDL_GetPerformanceCounter();
+#endif
+#ifdef SM3DS_PHASE_DIAG
+    g_diag_logic_ticks = after - before;
+#endif
+#ifdef SM3DS_PROFILE
     g_profile_game_ticks += after - before;
 #endif
     DrawFrameToPpu();
+#if defined(SM3DS_PROFILE) || defined(SM3DS_PHASE_DIAG)
+    uint64_t ppu_ticks = SDL_GetPerformanceCounter() - after;
+#endif
+#ifdef SM3DS_PHASE_DIAG
+    g_diag_ppu_ticks = ppu_ticks;
+    g_diag_phase_valid = true;
+#endif
 #ifdef SM3DS_PROFILE
-    g_profile_ppu_ticks += SDL_GetPerformanceCounter() - after;
+    g_profile_ppu_ticks += ppu_ticks;
 #endif
     // g_snes->runningWhichVersion = 0;
   } else {

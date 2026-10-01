@@ -33,6 +33,18 @@
 
 static const uint16 kFileSelectMap_AreaIndexes[6] = { 0, 3, 5, 1, 4, 2 };
 
+int16 g_oam_unwrapped_x[128];
+uint8 g_oam_unwrapped_valid[128];
+
+static void TrackOamX(int idx, uint16 base_x, uint16 packed_offset) {
+  /* Spritemap X uses a signed 9-bit offset; the upper bits contain size
+   * flags. Keep the complete screen position before OAM wraps it. */
+  int offset = packed_offset & 0x1ff;
+  if (offset & 0x100) offset -= 0x200;
+  g_oam_unwrapped_x[idx >> 2] = (int16)base_x + offset;
+  g_oam_unwrapped_valid[idx >> 2] = 1;
+}
+
 void SoftReset(void) {
   game_state = 0xffff;
 }
@@ -257,6 +269,7 @@ void DrawSpritemapWithBaseTile(uint8 db, uint16 j, uint16 r20_x, uint16 r18_y, u
   pp += 2;
   for(; n != 0; n--) {
     OamEnt *oam = gOamEnt(idx);
+    TrackOamX(idx, r20_x, GET_WORD(pp));
     uint16 x = r20_x + GET_WORD(pp + 0);
     oam->xcoord = x;
     oam_ext[idx >> 5] |= (((x & 0x100) >> 8) | (*(int16 *)pp < 0) * 2) << (2 * ((idx >> 2) & 7));
@@ -275,6 +288,7 @@ void DrawSpritemapWithBaseTile2(uint8 db, uint16 j, uint16 r20_x, uint16 r18_y, 
   pp += 2;
   for (; n != 0; n--) {
     OamEnt *oam = gOamEnt(idx);
+    TrackOamX(idx, r20_x, GET_WORD(pp));
     uint16 x = r20_x + GET_WORD(pp);
     oam->xcoord = x;
     oam_ext[idx >> 5] |= (((x & 0x100) >> 8) | (*(int16 *)pp < 0) * 2) << (2 * ((idx >> 2) & 7));
@@ -294,6 +308,7 @@ void DrawSpritemapWithBaseTileOffscreen(uint8 db, uint16 j, uint16 r20_x, uint16
   pp += 2;
   for (; n != 0; n--) {
     OamEnt *oam = gOamEnt(idx);
+    TrackOamX(idx, r20_x, GET_WORD(pp));
     int x = r20_x + GET_WORD(pp);
     oam->xcoord = x;
     oam_ext[idx >> 5] |= (((x & 0x100) >> 8) | (*(int16 *)pp < 0) * 2) << (2 * ((idx >> 2) & 7));
