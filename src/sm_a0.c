@@ -538,6 +538,51 @@ void ProcessEnemyTilesets(void) {  // 0xA08D64
   }
 }
 
+/* A visible wing/leg may extend beyond the enemy collision radius. In
+ * widescreen, keep its AI and animation active until that art also leaves.
+ * This fallback is only read for enemies rejected by the native bounds. */
+static bool SpritemapIntersectsWideViewport(uint8 bank, uint16 map, int x, int y) {
+  static const uint8 sizes[8][2] = {
+    {8,16}, {8,32}, {8,64}, {16,32}, {16,64}, {32,64}, {16,32}, {16,32}
+  };
+  if (map < 0x8000) return false;
+  const uint8 *p = RomPtrWithBank(bank, map);
+  unsigned count = GET_WORD(p);
+  if (count > 128 || (unsigned)map + 2 + count * 5 > 0x10000) return false;
+  p += 2;
+  for (unsigned i = 0; i < count; i++, p += 5) {
+    unsigned packed = GET_WORD(p);
+    int offset = packed & 511;
+    if (offset & 256) offset -= 512;
+    int sx = x + offset, sy = y + (int8)p[2];
+    unsigned size = sizes[reg_OBSEL >> 5][packed >> 15];
+    if (sx < 256 + g_sprite_viewport_margin &&
+        sx + (int)size > -(int)g_sprite_viewport_margin &&
+        sy < 224 && sy + (int)size > 0) return true;
+  }
+  return false;
+}
+
+static bool EnemyArtIntersectsWideViewport(uint16 k) {
+  if (!g_sprite_viewport_margin) return false;
+  EnemyData *e = gEnemyData(k);
+  EnemySpawnData *spawn = gEnemySpawnData(k);
+  int x = (int16)(e->x_pos + spawn->xpos2 - layer1_x_pos);
+  int y = (int16)(e->y_pos + spawn->ypos2 - layer1_y_pos);
+  if (!(e->extra_properties & 4))
+    return SpritemapIntersectsWideViewport(e->bank, e->spritemap_pointer, x, y);
+  if (e->spritemap_pointer < 0x8000) return false;
+  unsigned count = *RomPtrWithBank(e->bank, e->spritemap_pointer);
+  if (count > 128 || (unsigned)e->spritemap_pointer + 2 + count * 8 > 0x10000)
+    return false;
+  const ExtendedSpriteMap *p = get_ExtendedSpriteMap(e->bank, e->spritemap_pointer + 2);
+  for (unsigned i = 0; i < count; i++, p++)
+    if (SpritemapIntersectsWideViewport(e->bank, p->spritemap,
+                                      x + (int16)p->xpos, y + (int16)p->ypos))
+      return true;
+  return false;
+}
+
 void DetermineWhichEnemiesToProcess(void) {  // 0xA08EB6
   ++UNUSED_word_7E0E46;
   cur_enemy_index = 0;
@@ -580,7 +625,8 @@ void DetermineWhichEnemiesToProcess(void) {  // 0xA08EB6
                    || (int16)(v1->x_width + v1->x_pos - layer1_x_pos) >= -(int)g_sprite_viewport_margin
                    && (int16)(v1->x_width + layer1_x_pos + 256 - v1->x_pos) >= -(int)g_sprite_viewport_margin
                    && (int16)(v1->y_pos + 8 - layer1_y_pos) >= 0
-                   && (int16)(layer1_y_pos + 248 - v1->y_pos) >= 0) {
+                   && (int16)(layer1_y_pos + 248 - v1->y_pos) >= 0
+                   || EnemyArtIntersectsWideViewport(cur_enemy_index)) {
           uint16 v3 = active_enemy_indexes_write_ptr;
           active_enemy_indexes[active_enemy_indexes_write_ptr >> 1] = cur_enemy_index;
           active_enemy_indexes_write_ptr = v3 + 2;
@@ -2996,9 +3042,10 @@ PairU16 EnemyFunc_ACA8(Point16U base_pt, Point16U samus_pt) {  // 0xA0ACA8
 
 uint16 CheckIfEnemyIsOnScreen(void) {  // 0xA0AD70
   EnemyData *v0 = gEnemyData(cur_enemy_index);
-  return (int16)(v0->x_pos - layer1_x_pos) < -(int)g_sprite_viewport_margin ||
+  bool outside = (int16)(v0->x_pos - layer1_x_pos) < -(int)g_sprite_viewport_margin ||
       (int16)(layer1_x_pos + 256 - v0->x_pos) < -(int)g_sprite_viewport_margin ||
       (int16)(v0->y_pos - layer1_y_pos) < 0 || (int16)(layer1_y_pos + 256 - v0->y_pos) < 0;
+  return outside && !EnemyArtIntersectsWideViewport(cur_enemy_index);
 }
 
 uint16 EnemyFunc_ADA3(uint16 a) {  // 0xA0ADA3
@@ -3010,9 +3057,10 @@ uint16 EnemyFunc_ADA3(uint16 a) {  // 0xA0ADA3
 uint16 EnemyWithNormalSpritesIsOffScreen(void) {  // 0xA0ADE7
   EnemyData *E = gEnemyData(cur_enemy_index);
   // Keep drawn enemies visible for the full horizontal viewport.
-  return (int16)(E->x_width + E->x_pos - layer1_x_pos) < -(int)g_sprite_viewport_margin ||
+  bool outside = (int16)(E->x_width + E->x_pos - layer1_x_pos) < -(int)g_sprite_viewport_margin ||
       (int16)(E->x_width + layer1_x_pos + 256 - E->x_pos) < -(int)g_sprite_viewport_margin ||
       (int16)(E->y_pos + 8 - layer1_y_pos) < 0 || (int16)(layer1_y_pos + 248 - E->y_pos) < 0;
+  return outside && !EnemyArtIntersectsWideViewport(cur_enemy_index);
 }
 
 uint16 DetermineDirectionOfSamusFromEnemy(void) {  // 0xA0AE29
@@ -3393,7 +3441,7 @@ uint8 IsEnemyLeavingScreen(uint16 k) {  // 0xA0C18E
         (int16)(v3 - 256 - E->x_width) < (int)g_sprite_viewport_margin)
       return 0;
   }
-  return 1;
+  return !EnemyArtIntersectsWideViewport(k);
 }
 
 void ProcessEnemyInstructions(void) {  // 0xA0C26A

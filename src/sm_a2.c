@@ -2276,7 +2276,14 @@ void Rio_Main(void) {  // 0xA2BBE3
 }
 
 void Rio_1(uint16 k) {  // 0xA2BBED
-  if (!(CompareDistToSamus_X(k, 0xA0) & 1)) {
+  Enemy_Rio *rio = Get_Rio(k);
+  int x = (int16)(rio->base.x_pos - layer1_x_pos);
+  uint16 distance = 0xA0;
+  // Preserve the native trigger in the center. A visible Reo in an added
+  // side band gets the corresponding extra horizontal activation distance.
+  if (g_sprite_viewport_margin && (x < 0 || x >= 256) && !CheckIfEnemyIsOnScreen())
+    distance += g_sprite_viewport_margin;
+  if (!(CompareDistToSamus_X(k, distance) & 1)) {
     Enemy_Rio *E = Get_Rio(k);
     E->rio_var_C = g_word_A2BBBB;
     E->rio_var_D = g_word_A2BBBF;

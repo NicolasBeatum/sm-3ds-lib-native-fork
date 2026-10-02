@@ -144,43 +144,10 @@ void BrinstarPipeBug_PreInstr_3(uint16 k) {  // 0xB388E3
 
 void BrinstarPipeBug_PreInstr_4(uint16 k) {  // 0xB3891C
   Enemy_PipeBug *PipeBug = Get_PipeBug(k);
-  int32 dx = (PipeBug->pbg_var_A & 0x8000) ? -INT16_SHL16(2) : INT16_SHL16(2);
-  bool hit_wall = false;
-  if (g_sprite_viewport_margin) {
-    // The bug starts inside its pipe. Ignore collisions with those source
-    // tiles while it leaves, but still stop at other walls in the wide view.
-    int next_x = (int16)PipeBug->base.x_pos + (dx < 0 ? -2 : 2);
-    int room_right = room_width_in_blocks * 16;
-    if (next_x - PipeBug->base.x_width < 0 ||
-        next_x + PipeBug->base.x_width >= room_right) {
-      hit_wall = true;
-    } else {
-      uint16 old_x = PipeBug->base.x_pos;
-      uint16 old_subpos = PipeBug->base.x_subpos;
-      if (Enemy_MoveRight_IgnoreSlopes(k, dx)) {
-        int source_x = (int16)PipeBug->pbg_var_B;
-        int source_col = source_x >> 4;
-        int source_row = (int16)PipeBug->pbg_var_C >> 4;
-        int hit_col = cur_block_index % room_width_in_blocks;
-        int hit_row = cur_block_index / room_width_in_blocks;
-        int distance = next_x - source_x;
-        if (distance < 0) distance = -distance;
-        bool source_pipe = distance <= 32 &&
-            hit_col >= source_col - 1 && hit_col <= source_col + 1 &&
-            hit_row >= source_row - 1 && hit_row <= source_row + 1;
-        if (source_pipe) {
-          PipeBug->base.x_pos = old_x;
-          PipeBug->base.x_subpos = old_subpos;
-          AddToHiLo(&PipeBug->base.x_pos, &PipeBug->base.x_subpos, dx);
-        } else {
-          hit_wall = true;
-        }
-      }
-    }
-  } else {
-    PipeBug->base.x_pos += dx < 0 ? -2 : 2;
-  }
-  if (hit_wall || IsEnemyLeavingScreen(k)) {
+  // Native pipe bugs pass through level blocks. Only the viewport decides
+  // when to hide/reset them; its margin is widened by the port.
+  PipeBug->base.x_pos += (PipeBug->pbg_var_A & 0x8000) ? -2 : 2;
+  if (IsEnemyLeavingScreen(k)) {
     PipeBug->base.x_pos = PipeBug->pbg_var_B;
     PipeBug->base.x_subpos = 0;
     uint16 pbg_var_C = PipeBug->pbg_var_C;
@@ -383,33 +350,16 @@ void NorfairPipeBug_Func_9(void) {  // 0xB38DD2
   }
 }
 
-static void NorfairPipeBug_MoveHorizontal(Enemy_PipeBug *E, int32 dx) {
-  if (!g_sprite_viewport_margin) {
-    AddToHiLo(&E->base.x_pos, &E->base.x_subpos, dx);
-    return;
-  }
-  int next_x = (int16)((__PAIR32__(E->base.x_pos, E->base.x_subpos) + dx) >> 16);
-  int room_right = room_width_in_blocks * 16;
-  if (next_x - E->base.x_width < 0 || next_x + E->base.x_width >= room_right ||
-      Enemy_MoveRight_IgnoreSlopes(cur_enemy_index, dx)) {
-    E->base.properties |= kEnemyProps_Invisible;
-    E->pbg_var_A = FUNC16(NorfairPipeBug_Func_1);
-    E->base.x_pos = E->pbg_var_D;
-    E->base.y_pos = E->pbg_var_E;
-    E->base.x_subpos = E->base.y_subpos = 0;
-  }
-}
-
 void NorfairPipeBug_Func_10(void) {  // 0xB38E14
   Enemy_PipeBug *E = Get_PipeBug(cur_enemy_index);
   int v2 = E->pbg_var_B >> 1;
-  NorfairPipeBug_MoveHorizontal(E, __PAIR32__(kCommonEnemySpeeds_Linear[v2 + 2], kCommonEnemySpeeds_Linear[v2 + 3]));
+  AddToHiLo(&E->base.x_pos, &E->base.x_subpos, __PAIR32__(kCommonEnemySpeeds_Linear[v2 + 2], kCommonEnemySpeeds_Linear[v2 + 3]));
 }
 
 void NorfairPipeBug_Func_11(void) {  // 0xB38E35
   Enemy_PipeBug *E = Get_PipeBug(cur_enemy_index);
   int v2 = E->pbg_var_B >> 1;
-  NorfairPipeBug_MoveHorizontal(E, __PAIR32__(kCommonEnemySpeeds_Linear[v2], kCommonEnemySpeeds_Linear[v2 + 1]));
+  AddToHiLo(&E->base.x_pos, &E->base.x_subpos, __PAIR32__(kCommonEnemySpeeds_Linear[v2], kCommonEnemySpeeds_Linear[v2 + 1]));
 }
 
 void sub_B38E56(void) {  // 0xB38E56
@@ -456,6 +406,17 @@ void BrinstarYellowPipeBug_Main(void) {  // 0xB38FAE
 
   Enemy_PipeBug *E = Get_PipeBug(cur_enemy_index);
   CallBugInstr(E->pbg_var_A | 0xB30000, cur_enemy_index);
+  // Curved flight checks visibility before moving. Reset on the frame it
+  // leaves the wide view, before the next frame's AI culling.
+  if (g_sprite_viewport_margin && !(E->base.properties & kEnemyProps_Invisible) &&
+      CheckIfEnemyIsOnScreen()) {
+    E->base.x_pos = E->pbg_var_07;
+    E->base.y_pos = E->pbg_var_08;
+    E->base.x_subpos = E->base.y_subpos = 0;
+    E->pbg_var_A = FUNC16(BrinstarYellowPipeBug_Func_1);
+    E->pbg_var_06 = 0;
+    E->base.properties |= kEnemyProps_Invisible;
+  }
 }
 
 void BrinstarYellowPipeBug_Func_1(void) {  // 0xB38FB5
@@ -497,41 +458,9 @@ void BrinstarYellowPipeBug_Func_2(uint16 k) {  // 0xB38FF5
   }
 }
 
-static uint8 BrinstarYellowPipeBug_MoveHorizontal(uint16 k, int32 dx) {
-  Enemy_PipeBug *E = Get_PipeBug(k);
-  if (!g_sprite_viewport_margin) {
-    AddToHiLo(&E->base.x_pos, &E->base.x_subpos, dx);
-    return 0;
-  }
-  int dir = dx < 0 ? -1 : 1;
-  int next_x = (int16)((__PAIR32__(E->base.x_pos, E->base.x_subpos) + dx) >> 16);
-  int next_edge = next_x + dir * E->base.x_width;
-  int source_edge = (int16)E->pbg_var_07 + dir * E->base.x_width;
-  // The bug begins inside its wall. Let it leave that source block, then
-  // collide normally with every subsequent block in the wider viewport.
-  if ((next_edge >> 4) == (source_edge >> 4)) {
-    AddToHiLo(&E->base.x_pos, &E->base.x_subpos, dx);
-    return 0;
-  }
-  if (next_x - E->base.x_width >= 0 &&
-      next_x + E->base.x_width < room_width_in_blocks * 16 &&
-      !Enemy_MoveRight_IgnoreSlopes(k, dx)) return 0;
-  E->base.x_pos = E->pbg_var_07;
-  E->base.y_pos = E->pbg_var_08;
-  E->base.x_subpos = E->base.y_subpos = 0;
-  E->pbg_var_A = FUNC16(BrinstarYellowPipeBug_Func_1);
-  E->pbg_var_06 = 0;
-  E->base.properties |= kEnemyProps_Invisible;
-  E->base.instruction_timer = 1;
-  E->base.timer = 0;
-  E->base.current_instruction = E->pbg_parameter_1 ?
-      addr_kBrinstarYellowPipeBug_Ilist_8EFC : addr_kBrinstarYellowPipeBug_Ilist_8F24;
-  return 1;
-}
-
 void BrinstarYellowPipeBug_Func_3(void) {  // 0xB39028
   Enemy_PipeBug *E = Get_PipeBug(cur_enemy_index);
-  if (BrinstarYellowPipeBug_Func_4(cur_enemy_index)) return;
+  BrinstarYellowPipeBug_Func_4(cur_enemy_index);
   if (CheckIfEnemyIsOnScreen()) {
     E->base.x_pos = E->pbg_var_07;
     E->base.y_pos = E->pbg_var_08;
@@ -559,13 +488,14 @@ void BrinstarYellowPipeBug_Func_3(void) {  // 0xB39028
 
 uint8 BrinstarYellowPipeBug_Func_4(uint16 k) {  // 0xB390A1
   Enemy_PipeBug *E = Get_PipeBug(k);
-  return BrinstarYellowPipeBug_MoveHorizontal(k, __PAIR32__(E->pbg_var_03, E->pbg_var_02));
+  AddToHiLo(&E->base.x_pos, &E->base.x_subpos, __PAIR32__(E->pbg_var_03, E->pbg_var_02));
+  return 0;
 }
 
 void BrinstarYellowPipeBug_Func_5(void) {  // 0xB390BD
   Enemy_PipeBug *E = Get_PipeBug(cur_enemy_index);
 
-  if (BrinstarYellowPipeBug_Func_6(cur_enemy_index)) return;
+  BrinstarYellowPipeBug_Func_6(cur_enemy_index);
   if (CheckIfEnemyIsOnScreen()) {
     E->base.x_pos = E->pbg_var_07;
     E->base.y_pos = E->pbg_var_08;
@@ -593,7 +523,8 @@ void BrinstarYellowPipeBug_Func_5(void) {  // 0xB390BD
 
 uint8 BrinstarYellowPipeBug_Func_6(uint16 k) {  // 0xB3913A
   Enemy_PipeBug *E = Get_PipeBug(k);
-  return BrinstarYellowPipeBug_MoveHorizontal(k, __PAIR32__(E->pbg_var_01, E->pbg_var_00));
+  AddToHiLo(&E->base.x_pos, &E->base.x_subpos, __PAIR32__(E->pbg_var_01, E->pbg_var_00));
+  return 0;
 }
 
 void BrinstarYellowPipeBug_Func_7(void) {  // 0xB3915A
@@ -610,7 +541,7 @@ void BrinstarYellowPipeBug_Func_7(void) {  // 0xB3915A
     E->base.current_instruction = addr_kBrinstarYellowPipeBug_Ilist_8EFC;
     E->base.properties |= kEnemyProps_Invisible;
   } else {
-    if (BrinstarYellowPipeBug_Func_4(cur_enemy_index)) return;
+    BrinstarYellowPipeBug_Func_4(cur_enemy_index);
     if (E->pbg_var_F) {
       BrinstarYellowPipeBug_Func_10(cur_enemy_index);
     } else {
@@ -641,7 +572,7 @@ void BrinstarYellowPipeBug_Func_8(void) {  // 0xB391D8
     E->base.current_instruction = addr_kBrinstarYellowPipeBug_Ilist_8F24;
     E->base.properties |= kEnemyProps_Invisible;
   } else {
-    if (BrinstarYellowPipeBug_Func_6(cur_enemy_index)) return;
+    BrinstarYellowPipeBug_Func_6(cur_enemy_index);
     if (E->pbg_var_F) {
       BrinstarYellowPipeBug_Func_10(cur_enemy_index);
     } else {
