@@ -4,6 +4,10 @@
 #include <stdio.h>
 
 extern uint8 g_ram[0x20000];
+#ifdef SM3DS_PHASE_DIAG
+/* Main-thread queue publication wall time; lock wait is nested in queue. */
+extern uint64_t g_diag_apu_queue_ticks, g_diag_apu_wait_ticks;
+#endif
 extern void RtlApuWrite(uint32 adr, uint8 val);
 extern int snes_frame_counter;
 void RtlSetSpriteViewportMargin(uint8 margin);
@@ -116,6 +120,9 @@ void RtlSaveLoad(int cmd, int slot);
 void RtlCheat(char c);
 void RtlApuLock();
 void RtlApuUnlock();
+/* 3DS keeps command publication separate from long SPC/DSP synthesis. */
+void RtlApuQueueLock(void);
+void RtlApuQueueUnlock(void);
 void RtlApuUpload(const uint8 *p);
 void RtlRenderAudio(int16 *audio_buffer, int samples, int channels);
 void RtlPushApuState();

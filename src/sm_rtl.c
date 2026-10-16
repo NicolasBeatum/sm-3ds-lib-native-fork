@@ -6,11 +6,17 @@
 #include "funcs.h"
 #include "spc_player.h"
 #include "util.h"
-#ifdef SM3DS_PROFILE
+#if defined(SM3DS_PROFILE) || defined(SM3DS_PHASE_DIAG)
 #include "SDL2/SDL.h"
+#endif
+#ifdef SM3DS_PROFILE
 uint64_t g_profile_audio_lock_ticks;
 uint64_t g_profile_audio_generate_ticks;
 uint64_t g_profile_audio_copy_ticks;
+#endif
+
+#ifdef SM3DS_PHASE_DIAG
+uint64_t g_diag_apu_queue_ticks, g_diag_apu_wait_ticks;
 #endif
 
 struct StateRecorder;
@@ -450,7 +456,13 @@ bool RtlRunFrame(int inputs) {
 
   snes_frame_counter++;
 
+#ifdef SM3DS_PHASE_DIAG
+  uint64_t queue_before=SDL_GetPerformanceCounter();
+#endif
   RtlPushApuState();
+#ifdef SM3DS_PHASE_DIAG
+  g_diag_apu_queue_ticks=SDL_GetPerformanceCounter()-queue_before;
+#endif
   return is_replay;
 }
 
@@ -608,8 +620,32 @@ static bool IsFrameEmpty(ApuWriteEnt *w) {
   return (w->ports[0] == 255) && (w->ports[1] == 255) && (w->ports[2] == 255) && (w->ports[3] == 255);
 }
 
+/* Desktop frontends keep the original shared mixer lock. On 3DS, publication
+ * owns only the queue mutex; synthesis/snapshots take audio then queue, never
+ * queue then audio. No sample-rate, mixing or SPC/DSP math changes. */
+static void LockQueue(bool audio_locked) {
+#if defined(__3DS__) || defined(SM3DS_SPLIT_APU_QUEUE)
+  (void)audio_locked;RtlApuQueueLock();
+#else
+  if(!audio_locked) RtlApuLock();
+#endif
+}
+static void UnlockQueue(bool audio_locked) {
+#if defined(__3DS__) || defined(SM3DS_SPLIT_APU_QUEUE)
+  (void)audio_locked;RtlApuQueueUnlock();
+#else
+  if(!audio_locked) RtlApuUnlock();
+#endif
+}
+
 void RtlPushApuState(void) {
-  RtlApuLock();
+#ifdef SM3DS_PHASE_DIAG
+  uint64_t lock_before=SDL_GetPerformanceCounter();
+#endif
+  LockQueue(false);
+#ifdef SM3DS_PHASE_DIAG
+  g_diag_apu_wait_ticks=SDL_GetPerformanceCounter()-lock_before;
+#endif
   if (!is_uploading_apu) {
     // Strive for the queue to be empty.
     if (g_apu_queue_size == 0) {
@@ -617,7 +653,7 @@ void RtlPushApuState(void) {
     } else {
       if (g_apu_time_since_empty >= 32 && IsFrameEmpty(&g_apu_write)) {
         g_apu_time_since_empty -= 4;
-        RtlApuUnlock();
+        UnlockQueue(false);
         return;
       }
       g_apu_time_since_empty++;
@@ -638,13 +674,14 @@ void RtlPushApuState(void) {
   } else {
     g_apu_queue_size = 0;
   }
-  RtlApuUnlock();
+  UnlockQueue(false);
 }
 
 static void RtlPopApuState_Locked(void) {
   if (is_uploading_apu)
     return;
 
+  LockQueue(true);
   uint8 *input_ports = g_use_my_apu_code ? g_spc_player->input_ports : g_snes->apu->inPorts;
   if (g_apu_queue_size != 0) {
     ApuWriteEnt *w = &g_apu_write_ents[(g_apu_write_ent_pos - g_apu_queue_size--) & (kApuMaxQueueSize - 1)];
@@ -653,11 +690,14 @@ static void RtlPopApuState_Locked(void) {
         input_ports[i] = w->ports[i];
     }
   }
+  UnlockQueue(true);
 }
 
 static void RtlResetApuQueue(void) {
+  LockQueue(true);
   g_apu_write_ent_pos = g_apu_time_since_empty = g_apu_queue_size = 0;
   memset(&g_apu_write, 0xff, sizeof(g_apu_write));
+  UnlockQueue(true);
 }
 
 void RtlApuUpload(const uint8 *p) {
@@ -685,6 +725,7 @@ void RtlSaveMusicStateToRam_Locked(void) {
   if (g_use_my_apu_code) {
     // Apply the whole contents of the queue to input ports
     SpcPlayer *spc_player = g_spc_player;
+    LockQueue(true);
     for (int i = g_apu_queue_size; i; i--) {
       ApuWriteEnt *we = &g_apu_write_ents[(g_apu_write_ent_pos - i) & (kApuMaxQueueSize - 1)];
       for (int j = 0; j < 4; j++) {
@@ -692,6 +733,7 @@ void RtlSaveMusicStateToRam_Locked(void) {
           spc_player->input_ports[j] = we->ports[j];
       }
     }
+    UnlockQueue(true);
     SpcPlayer_CopyVariablesToRam(g_spc_player);
     memcpy(g_snes->apu->dsp->ram, g_spc_player->dsp->ram, sizeof(Dsp) - offsetof(Dsp, ram));
     memcpy(g_snes->apu->ram, g_spc_player->ram, 65536);
